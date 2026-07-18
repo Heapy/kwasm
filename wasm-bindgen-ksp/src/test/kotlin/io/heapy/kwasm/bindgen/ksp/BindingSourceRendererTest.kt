@@ -119,6 +119,8 @@ class BindingSourceRendererTest {
         assertContains(source, "private external fun kwasmBindgenHostBegin")
         assertContains(source, "private external fun kwasmBindgenHostFinish")
         assertContains(source, "WasmGuestExportRegistry.dispatchBlocking(")
+        assertContains(source, "withScopedMemoryAllocator")
+        assertFalse(source.contains("componentModelRealloc"))
     }
 
     @Test
