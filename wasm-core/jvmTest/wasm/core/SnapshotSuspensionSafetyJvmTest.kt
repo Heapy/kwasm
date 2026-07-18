@@ -1,0 +1,96 @@
+package io.heapy.kwasm
+
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class SnapshotSuspensionSafetyJvmTest {
+    @Test
+    fun hostImportCannotResumeWhileSnapshotTraversalOwnsTheStore(): Unit = runBlocking {
+        val type = FuncType(emptyList(), emptyList())
+        val module = validatedModule {
+            types += type
+            imports += Import("host", "wait", ImportDesc.Function(0))
+            memories += Memory(MemoryType(Limits(1u, 1u)))
+            exports += Export("wait", ExportDesc.Function(0))
+        }
+        val releaseImport = CompletableDeferred<Unit>()
+        val resumedHostCode = AtomicBoolean(false)
+        val store = Store()
+        val invocationDispatcher =
+            Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        lateinit var instance: Instance
+        instance = Instance(
+            store,
+            module,
+            ResolvedImports(
+                functions = listOf(
+                    HostImport(type) {
+                        // The switched block is I/O-only. Guest mutation is
+                        // deliberately applied after returning to the gated
+                        // host continuation.
+                        withContext(Dispatchers.IO) {
+                            releaseImport.await()
+                        }
+                        resumedHostCode.set(true)
+                        instance.memories.single().storeByte(0, 1)
+                        emptyList()
+                    },
+                ),
+            ),
+        )
+
+        try {
+            val invocation = async(invocationDispatcher) { instance.invoke("wait") }
+            store.status.first { it == StoreStatus.InHostImport }
+
+            val captureStarted = CountDownLatch(1)
+            val finishCapture = CountDownLatch(1)
+            val captured = async(Dispatchers.Default) {
+                store.captureSnapshotState(instance) { state ->
+                    captureStarted.countDown()
+                    assertTrue(finishCapture.await(5, TimeUnit.SECONDS))
+                    state
+                }
+            }
+            assertTrue(captureStarted.await(5, TimeUnit.SECONDS))
+
+            releaseImport.complete(Unit)
+            assertTrue(
+                withTimeout(2_000) {
+                    withContext(invocationDispatcher) { true }
+                },
+                "a ready host continuation must suspend on the gate, not block its dispatcher thread",
+            )
+            assertFalse(resumedHostCode.get())
+            assertEquals(0, instance.memories.single().loadByte(0))
+
+            finishCapture.countDown()
+            assertEquals(0, captured.await().instance.memories.single().bytes()[0].toInt())
+            assertEquals(emptyList(), invocation.await())
+            assertTrue(resumedHostCode.get())
+            assertEquals(1, instance.memories.single().loadByte(0))
+        } finally {
+            invocationDispatcher.close()
+        }
+    }
+
+    private fun validatedModule(configure: ModuleBuilder.() -> Unit): Module =
+        ModuleBuilder()
+            .apply(configure)
+            .build(byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00))
+            .also(ModuleValidator::validate)
+}

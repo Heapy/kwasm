@@ -1,0 +1,18 @@
+product:
+  type: kmp/lib
+  platforms: [android, iosArm64, iosSimulatorArm64, jvm, linuxArm64, linuxX64, macosArm64, macosX64]
+
+description: "WebAssembly text format (WAT) parser producing the binary model from wasm-core."
+
+dependencies:
+  - ../wasm-core
+
+settings:
+  android:
+    minSdk: 26
+  jvm:
+    release: 17
+  kotlin:
+    version: "2.4.10"
+    languageVersion: "2.4"
+    apiVersion: "2.4"
