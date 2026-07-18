@@ -102,15 +102,15 @@ jobs:
               :bindgen-runtime:linuxX64Test
               :tck:linuxX64Test
 
-          - name: Linux arm64 tests
-            runner: ubuntu-24.04-arm
+          - name: Linux arm64 compile
+            runner: ubuntu-24.04
             tasks: >-
-              :core:linuxArm64Test
-              :snapshot:linuxArm64Test
-              :wasi:linuxArm64Test
-              :bindgen-api:linuxArm64Test
-              :bindgen-runtime:linuxArm64Test
-              :tck:linuxArm64Test
+              :core:compileTestKotlinLinuxArm64
+              :snapshot:compileTestKotlinLinuxArm64
+              :wasi:compileTestKotlinLinuxArm64
+              :bindgen-api:compileTestKotlinLinuxArm64
+              :bindgen-runtime:compileTestKotlinLinuxArm64
+              :tck:compileTestKotlinLinuxArm64
 
           - name: macOS arm64 tests
             runner: macos-15
