@@ -1,0 +1,220 @@
+name: Performance
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jvm:
+    name: JVM performance gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore JVM self-history
+        id: history
+        uses: actions/cache/restore@v5
+        with:
+          path: benchmarks/.performance-history/jvm.json
+          key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            kwasm-performance-jvm-${{ runner.os }}-
+
+      - name: Test gate and run JVM benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate_args=()
+          if [[ -s benchmarks/.performance-history/jvm.json ]]; then
+            gate_args+=(
+              "-Pkwasm.benchmark.baseline=benchmarks/.performance-history/jvm.json"
+            )
+          fi
+          ./gradlew --stacktrace \
+            :benchmarks:performanceGateToolTest \
+            :benchmarks:jvmPerformanceGate \
+            -Pkwasm.benchmark.externalComparisons=benchmarks/baselines/external-unmeasured.json \
+            "${gate_args[@]}"
+
+      - name: Stage successful JVM history
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          mkdir -p benchmarks/.performance-history
+          cp \
+            benchmarks/build/performance/current-jvm.json \
+            benchmarks/.performance-history/jvm.json
+
+      - name: Save successful JVM history
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: benchmarks/.performance-history/jvm.json
+          key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload JVM evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: performance-jvm-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            benchmarks/build/reports/benchmarks/main/**/jvm.json
+            benchmarks/build/performance/current-jvm.json
+            benchmarks/build/performance/gate-jvm.json
+
+  native:
+    name: ${{ matrix.target }} performance gates
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linuxX64
+            runner: ubuntu-24.04
+          - target: macosArm64
+            runner: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore Native self-history
+        uses: actions/cache/restore@v5
+        with:
+          path: benchmarks/.performance-history/${{ matrix.target }}.json
+          key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            kwasm-performance-${{ matrix.target }}-${{ runner.os }}-
+
+      - name: Run Native benchmark and gate
+        shell: bash
+        env:
+          KWASM_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          gate_args=()
+          history="benchmarks/.performance-history/${KWASM_TARGET}.json"
+          if [[ -s "$history" ]]; then
+            gate_args+=("-Pkwasm.benchmark.baseline=$history")
+          fi
+          ./gradlew --stacktrace \
+            ":benchmarks:${KWASM_TARGET}PerformanceGate" \
+            -Pkwasm.benchmark.externalComparisons=benchmarks/baselines/external-unmeasured.json \
+            "${gate_args[@]}"
+
+      - name: Stage successful Native history
+        if: success() && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          KWASM_TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p benchmarks/.performance-history
+          cp \
+            "benchmarks/build/performance/current-${KWASM_TARGET}.json" \
+            "benchmarks/.performance-history/${KWASM_TARGET}.json"
+
+      - name: Save successful Native history
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: benchmarks/.performance-history/${{ matrix.target }}.json
+          key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Upload Native evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: performance-${{ matrix.target }}-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            benchmarks/build/reports/benchmarks/main/**/${{ matrix.target }}.json
+            benchmarks/build/performance/current-${{ matrix.target }}.json
+            benchmarks/build/performance/gate-${{ matrix.target }}.json
+
+  native-image:
+    name: GraalVM native-image smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up GraalVM 17
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "17"
+          distribution: graalvm
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: "true"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build application distribution
+        run: ./gradlew --stacktrace :samples-cli:installDist
+
+      - name: Compile and execute native image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' jars < <(
+            find wasm-cli/build/install/samples-cli/lib \
+              -type f \
+              -name '*.jar' \
+              -print0
+          )
+          if (( ${#jars[@]} == 0 )); then
+            echo "samples-cli distribution contains no jars" >&2
+            exit 1
+          fi
+          classpath="$(IFS=:; echo "${jars[*]}")"
+          mkdir -p build/native-image
+          native-image \
+            --no-fallback \
+            -cp "$classpath" \
+            io.heapy.kwasm.cli.SmokeTestKt \
+            build/native-image/kwasm-smoke
+          build/native-image/kwasm-smoke
+
+      - name: Upload native image
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-image-smoke-${{ github.run_id }}
+          path: build/native-image/kwasm-smoke

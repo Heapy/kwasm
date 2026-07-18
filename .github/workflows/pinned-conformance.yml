@@ -1,0 +1,244 @@
+name: Pinned conformance
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pinned-conformance-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SPEC_TAG: wg-3.0
+  SPEC_COMMIT: 9d36019973201a19f9c9ebb0f10828b2fe2374aa
+  WABT_COMMIT: 11602da5423eb9c7517311ed01917ea231594170
+  WASI_TESTSUITE_COMMIT: caf3b66fa3457cc17156864d971387a7e9f5933b
+
+jobs:
+  wasm-core:
+    name: Wasm 3.0 core / ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: JVM + Linux x64 Native
+            id: jvm-linux-x64
+            runner: ubuntu-24.04
+            tasks: ":tck:jvmTest :tck:linuxX64Test"
+          - name: Linux arm64 Native
+            id: linux-arm64
+            runner: ubuntu-24.04-arm
+            tasks: ":tck:linuxArm64Test"
+          - name: macOS arm64 Native
+            id: macos-arm64-ios-simulator
+            runner: macos-15
+            tasks: ":tck:macosArm64Test :tck:iosSimulatorArm64Test"
+          - name: macOS x64 Native
+            id: macos-x64
+            runner: macos-15-intel
+            tasks: ":tck:macosX64Test"
+
+    steps:
+      - name: Check out kwasm
+        uses: actions/checkout@v6
+
+      - name: Check out WebAssembly spec wg-3.0
+        uses: actions/checkout@v6
+        with:
+          repository: WebAssembly/spec
+          ref: wg-3.0
+          path: upstream/spec
+          fetch-depth: 1
+
+      - name: Check out pinned WABT
+        uses: actions/checkout@v6
+        with:
+          repository: WebAssembly/wabt
+          ref: 11602da5423eb9c7517311ed01917ea231594170
+          path: upstream/wabt
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Verify pins and stage the top-level Wasm 3.0 core corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C upstream/spec rev-parse HEAD)" = "$SPEC_COMMIT"
+          test "$(git -C upstream/wabt rev-parse HEAD)" = "$WABT_COMMIT"
+          mkdir -p upstream/spec-core-wg3
+          for source_script in upstream/spec/test/core/*.wast; do
+            cp "$source_script" upstream/spec-core-wg3/
+          done
+          staged_scripts=(upstream/spec-core-wg3/*.wast)
+          test "${#staged_scripts[@]}" = "97"
+
+      - name: Build pinned wast2json
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S upstream/wabt -B upstream/wabt/build \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_TOOLS=ON
+          cmake --build upstream/wabt/build --target wast2json --parallel 2
+          test -x upstream/wabt/build/wast2json
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run generated core corpus
+        id: conformance
+        shell: bash
+        env:
+          GRADLE_TASKS: ${{ matrix.tasks }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ./gradlew --stacktrace --console=plain \
+            :tck:verifyTckExclusions \
+            :tck:verifyWast2JsonExclusions \
+            $GRADLE_TASKS \
+            -Pkwasm.tck.wastDir="$GITHUB_WORKSPACE/upstream/spec-core-wg3" \
+            -Pkwasm.tck.converterExclusions=wg-3.0 \
+            -Pkwasm.wabt.wast2json="$GITHUB_WORKSPACE/upstream/wabt/build/wast2json" \
+            2>&1 | tee "artifacts/core-${{ matrix.id }}.log"
+
+      - name: Write core conformance summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "## Pinned Wasm 3.0 core — ${{ matrix.name }}"
+            echo
+            echo "- Result: **${{ steps.conformance.outcome }}**"
+            echo "- WebAssembly spec: \`$SPEC_TAG\` at \`$SPEC_COMMIT\`"
+            echo "- WABT: \`$WABT_COMMIT\`"
+            echo "- Scope: 97 top-level core scripts"
+            echo "- Eight issue-backed converter exclusions are not generated or executed."
+            grep -Rho "kwasm generated[^<]*" \
+              wasm-tck/build/test-results 2>/dev/null | sort -u || true
+            if test -f wasm-tck/build/generated/tck/_conversion-summary.txt; then
+              echo
+              echo '```text'
+              cat wasm-tck/build/generated/tck/_conversion-summary.txt
+              echo '```'
+            fi
+          } | tee "artifacts/core-${{ matrix.id }}-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload core conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-core-${{ matrix.id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/
+            wasm-tck/build/generated/tck/_conversion-summary.txt
+            wasm-tck/build/test-results/
+            wasm-tck/build/reports/tests/
+
+  wasi-preview1:
+    name: WASI Preview 1 full corpus / ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: JVM
+            id: jvm
+            runner: ubuntu-24.04
+            tasks: ":tck:jvmTest"
+          - name: macOS arm64 Native
+            id: macos-arm64
+            runner: macos-15
+            tasks: ":tck:macosArm64Test"
+
+    steps:
+      - name: Check out kwasm
+        uses: actions/checkout@v6
+
+      - name: Check out pinned official WASI testsuite
+        uses: actions/checkout@v6
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: caf3b66fa3457cc17156864d971387a7e9f5933b
+          path: upstream/wasi-testsuite
+          fetch-depth: 1
+
+      - name: Verify WASI testsuite pin and complete Preview 1 corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C upstream/wasi-testsuite rev-parse HEAD)" = "$WASI_TESTSUITE_COMMIT"
+          preview1_fixture_count="$(
+            find upstream/wasi-testsuite -type f \
+              -path '*/wasm32-wasip1/*.wasm' -print |
+              wc -l |
+              tr -d '[:space:]'
+          )"
+          test "$preview1_fixture_count" = "72"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run complete official Preview 1 corpus
+        id: conformance
+        shell: bash
+        env:
+          GRADLE_TASKS: ${{ matrix.tasks }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          ./gradlew --stacktrace --console=plain \
+            :tck:verifyWasiTestsuiteExclusions \
+            $GRADLE_TASKS \
+            -Pkwasm.wasi.testsuiteDir="$GITHUB_WORKSPACE/upstream/wasi-testsuite" \
+            2>&1 | tee "artifacts/wasi-preview1-${{ matrix.id }}.log"
+
+      - name: Write WASI conformance summary
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "## Official WASI Preview 1 full corpus — ${{ matrix.name }}"
+            echo
+            echo "- Result: **${{ steps.conformance.outcome }}**"
+            echo "- wasi-testsuite: \`$WASI_TESTSUITE_COMMIT\`"
+            echo "- Scope: all 72 pinned C, Rust, and AssemblyScript \`wasm32-wasip1\` fixtures"
+            echo "- Exclusions: strict checked-in manifest; stale and malformed entries fail."
+            grep -Rho "kwasm official WASI Preview 1:[^<]*" \
+              wasm-tck/build/test-results 2>/dev/null | sort -u || true
+          } | tee "artifacts/wasi-preview1-${{ matrix.id }}-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload WASI conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-wasi-preview1-${{ matrix.id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/
+            wasm-tck/build/test-results/
+            wasm-tck/build/reports/tests/

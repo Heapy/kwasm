@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kotlin-wasm-compiler-compatibility:
+    name: Kotlin/Wasm compilers 2.4.0 and 2.3.21
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and execute both pinned compiler rows
+        shell: bash
+        run: bash scripts/verify-kotlin-wasm-compiler-compatibility.sh
+
+  jvm:
+    name: JVM and build tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run focused JVM checks
+        run: >-
+          ./gradlew --stacktrace
+          :core:jvmTest
+          :snapshot:jvmTest
+          :wasi:jvmTest
+          :bindgen-api:jvmTest
+          :bindgen-runtime:jvmTest
+          :bindgen-ksp:test
+          :gradle-plugin:check
+          :tck:jvmTest
+          :tck:verifyTckExclusions
+          :tck:verifyWast2JsonExclusions
+          :tck:verifyWasiTestsuiteExclusions
+
+      - name: Run end-to-end smoke program
+        run: ./gradlew --stacktrace :samples-cli:run
+
+  targets:
+    name: ${{ matrix.name }}
+    needs: jvm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Android API 26+ compile
+            runner: ubuntu-24.04
+            tasks: >-
+              :core:compileAndroidMain
+              :snapshot:compileAndroidMain
+              :wasi:compileAndroidMain
+              :bindgen-api:compileAndroidMain
+              :bindgen-runtime:compileAndroidMain
+              :tck:compileAndroidMain
+
+          - name: Linux x64 tests
+            runner: ubuntu-24.04
+            tasks: >-
+              :core:linuxX64Test
+              :snapshot:linuxX64Test
+              :wasi:linuxX64Test
+              :bindgen-api:linuxX64Test
+              :bindgen-runtime:linuxX64Test
+              :tck:linuxX64Test
+
+          - name: Linux arm64 tests
+            runner: ubuntu-24.04-arm
+            tasks: >-
+              :core:linuxArm64Test
+              :snapshot:linuxArm64Test
+              :wasi:linuxArm64Test
+              :bindgen-api:linuxArm64Test
+              :bindgen-runtime:linuxArm64Test
+              :tck:linuxArm64Test
+
+          - name: macOS arm64 tests
+            runner: macos-15
+            tasks: >-
+              :core:macosArm64Test
+              :snapshot:macosArm64Test
+              :wasi:macosArm64Test
+              :bindgen-api:macosArm64Test
+              :bindgen-runtime:macosArm64Test
+              :tck:macosArm64Test
+
+          - name: macOS x64 tests
+            runner: macos-15-intel
+            tasks: >-
+              :core:macosX64Test
+              :snapshot:macosX64Test
+              :wasi:macosX64Test
+              :bindgen-api:macosX64Test
+              :bindgen-runtime:macosX64Test
+              :tck:macosX64Test
+
+          - name: iOS simulator arm64 tests
+            runner: macos-15
+            tasks: >-
+              :core:iosSimulatorArm64Test
+              :snapshot:iosSimulatorArm64Test
+              :wasi:iosSimulatorArm64Test
+              :bindgen-api:iosSimulatorArm64Test
+              :bindgen-runtime:iosSimulatorArm64Test
+              :tck:iosSimulatorArm64Test
+
+          - name: iOS device arm64 compile
+            runner: macos-15
+            tasks: >-
+              :core:compileKotlinIosArm64
+              :snapshot:compileKotlinIosArm64
+              :wasi:compileKotlinIosArm64
+              :bindgen-api:compileKotlinIosArm64
+              :bindgen-runtime:compileKotlinIosArm64
+              :tck:compileKotlinIosArm64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Verify target
+        env:
+          GRADLE_TASKS: ${{ matrix.tasks }}
+        run: ./gradlew --stacktrace $GRADLE_TASKS

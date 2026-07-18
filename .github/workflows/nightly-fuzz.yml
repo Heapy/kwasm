@@ -1,0 +1,222 @@
+name: Nightly robustness fuzz
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      raw_iterations:
+        description: Deterministic malformed Wasm decoder cases
+        required: true
+        default: "100000"
+        type: string
+      snapshot_mutations:
+        description: Mutations of a valid suspended-state snapshot
+        required: true
+        default: "5000"
+        type: string
+      snapshot_properties:
+        description: Run-k/capture/restore/finish equivalence cases
+        required: true
+        default: "64"
+        type: string
+      smith_modules:
+        description: Deterministic wasm-smith modules
+        required: true
+        default: "128"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WASM_TOOLS_VERSION: 1.243.0
+  WASM_TOOLS_SHA256: f261622f8015d38ebe9c3345cc2f7bb5de055d3a66ab44efdf78f11068ed9d9f
+  WASMTIME_VERSION: 46.0.1
+  WASMTIME_SHA256: 9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62
+  RAW_SEED: "0x4B5741534D"
+  SNAPSHOT_SEED: "0x534E415053484F54"
+  SMITH_SEED: "kwasm-wasm-smith-v1"
+
+jobs:
+  fuzz:
+    name: JVM raw, snapshot, and wasmtime differential
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install checksum-pinned official fuzz tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tools/downloads .tools/wasm-tools .tools/wasmtime
+
+          curl --fail --location --silent --show-error \
+            "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz" \
+            --output .tools/downloads/wasm-tools.tar.gz
+          echo "${WASM_TOOLS_SHA256}  .tools/downloads/wasm-tools.tar.gz" |
+            sha256sum --check --strict
+          tar -xzf .tools/downloads/wasm-tools.tar.gz \
+            --strip-components=1 \
+            -C .tools/wasm-tools
+
+          curl --fail --location --silent --show-error \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz" \
+            --output .tools/downloads/wasmtime.tar.xz
+          echo "${WASMTIME_SHA256}  .tools/downloads/wasmtime.tar.xz" |
+            sha256sum --check --strict
+          tar -xJf .tools/downloads/wasmtime.tar.xz \
+            --strip-components=1 \
+            -C .tools/wasmtime
+
+          test -x .tools/wasm-tools/wasm-tools
+          test -x .tools/wasmtime/wasmtime
+          test "$(.tools/wasmtime/wasmtime --version | awk '{print $2}')" = "$WASMTIME_VERSION"
+          .tools/wasm-tools/wasm-tools --version
+          .tools/wasmtime/wasmtime --version
+
+      - name: Resolve bounded dispatch inputs
+        shell: bash
+        env:
+          REQUESTED_RAW_ITERATIONS: ${{ inputs.raw_iterations || '100000' }}
+          REQUESTED_SNAPSHOT_MUTATIONS: ${{ inputs.snapshot_mutations || '5000' }}
+          REQUESTED_SNAPSHOT_PROPERTIES: ${{ inputs.snapshot_properties || '64' }}
+          REQUESTED_SMITH_MODULES: ${{ inputs.smith_modules || '128' }}
+        run: |
+          set -euo pipefail
+          for value in \
+            "$REQUESTED_RAW_ITERATIONS" \
+            "$REQUESTED_SNAPSHOT_MUTATIONS" \
+            "$REQUESTED_SNAPSHOT_PROPERTIES" \
+            "$REQUESTED_SMITH_MODULES"; do
+            [[ "$value" =~ ^[0-9]+$ ]]
+          done
+          (( REQUESTED_RAW_ITERATIONS >= 1 && REQUESTED_RAW_ITERATIONS <= 1000000 ))
+          (( REQUESTED_SNAPSHOT_MUTATIONS >= 1 && REQUESTED_SNAPSHOT_MUTATIONS <= 50000 ))
+          (( REQUESTED_SNAPSHOT_PROPERTIES >= 1 && REQUESTED_SNAPSHOT_PROPERTIES <= 1000 ))
+          (( REQUESTED_SMITH_MODULES >= 1 && REQUESTED_SMITH_MODULES <= 512 ))
+          {
+            echo "RAW_ITERATIONS=$REQUESTED_RAW_ITERATIONS"
+            echo "SNAPSHOT_MUTATIONS=$REQUESTED_SNAPSHOT_MUTATIONS"
+            echo "SNAPSHOT_PROPERTIES=$REQUESTED_SNAPSHOT_PROPERTIES"
+            echo "SMITH_MODULES=$REQUESTED_SMITH_MODULES"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate deterministic constrained wasm-smith corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream/fuzz-seeds upstream/fuzz-corpus artifacts
+          for ((case_index = 0; case_index < SMITH_MODULES; case_index++)); do
+            seed_file="upstream/fuzz-seeds/$(printf '%04d' "$case_index").bin"
+            module_file="upstream/fuzz-corpus/$(printf '%04d' "$case_index").wasm"
+            : > "$seed_file"
+            for seed_round in 0 1 2 3 4 5 6 7; do
+              printf '%s:%s:%s\n' "$SMITH_SEED" "$case_index" "$seed_round" |
+                sha256sum |
+                cut -d ' ' -f 1 |
+                xxd -r -p >> "$seed_file"
+            done
+            .tools/wasm-tools/wasm-tools smith \
+              --config wasm-tck/fuzz/wasm-smith.json \
+              --exports wasm-tck/fuzz/scalar-exports.wat \
+              --ensure-termination \
+              --fuel 64 \
+              "$seed_file" \
+              --output "$module_file"
+            .tools/wasm-tools/wasm-tools validate "$module_file"
+          done
+          actual_modules="$(find upstream/fuzz-corpus -type f -name '*.wasm' | wc -l | tr -d '[:space:]')"
+          test "$actual_modules" = "$SMITH_MODULES"
+          sha256sum upstream/fuzz-corpus/*.wasm > artifacts/wasm-smith-corpus.sha256
+          {
+            echo "wasm-tools $WASM_TOOLS_VERSION"
+            echo "wasmtime $WASMTIME_VERSION"
+            echo "smith-seed $SMITH_SEED"
+            echo "smith-modules $SMITH_MODULES"
+            echo "raw-seed $RAW_SEED"
+            echo "raw-iterations $RAW_ITERATIONS"
+            echo "snapshot-seed $SNAPSHOT_SEED"
+            echo "snapshot-mutations $SNAPSHOT_MUTATIONS"
+            echo "snapshot-properties $SNAPSHOT_PROPERTIES"
+          } > artifacts/configuration.txt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run TCK adapter tests and bounded fuzz gates
+        id: fuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --stacktrace --console=plain \
+            :tck:jvmTest \
+            :tck:nightlyFuzz \
+            -Pkwasm.fuzz.rawSeed="$RAW_SEED" \
+            -Pkwasm.fuzz.rawIterations="$RAW_ITERATIONS" \
+            -Pkwasm.fuzz.rawMaxBytes=4096 \
+            -Pkwasm.fuzz.snapshotSeed="$SNAPSHOT_SEED" \
+            -Pkwasm.fuzz.snapshotMutationIterations="$SNAPSHOT_MUTATIONS" \
+            -Pkwasm.fuzz.snapshotPropertyIterations="$SNAPSHOT_PROPERTIES" \
+            -Pkwasm.fuzz.corpusDir="$GITHUB_WORKSPACE/upstream/fuzz-corpus" \
+            -Pkwasm.fuzz.requireDifferential=true \
+            -Pkwasm.fuzz.wasmtime="$GITHUB_WORKSPACE/.tools/wasmtime/wasmtime" \
+            -Pkwasm.fuzz.wasmtimeVersion="$WASMTIME_VERSION" \
+            -Pkwasm.fuzz.artifactsDir="$GITHUB_WORKSPACE/artifacts/fuzz-evidence" \
+            -Pkwasm.fuzz.maxModules="$SMITH_MODULES" \
+            -Pkwasm.fuzz.maxInvocationsPerModule=4 \
+            -Pkwasm.fuzz.maxModuleBytes=1048576 \
+            -Pkwasm.fuzz.processTimeoutMillis=5000 \
+            -Pkwasm.fuzz.executionFuel=5000000 \
+            -Pkwasm.fuzz.maxRuntimeMemoryBytes=4194304 \
+            -Pkwasm.fuzz.maxTableElements=1024 \
+            -Pkwasm.fuzz.minimizationAttempts=32 \
+            2>&1 | tee artifacts/nightly-fuzz.log
+
+      - name: Write robustness summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Nightly kwasm robustness fuzz"
+            echo
+            echo "- Result: **${{ steps.fuzz.outcome }}**"
+            echo "- wasm-tools: \`$WASM_TOOLS_VERSION\` (archive SHA-256 pinned)"
+            echo "- wasmtime: \`$WASMTIME_VERSION\` (archive SHA-256 pinned)"
+            echo "- Raw decoder: \`$RAW_ITERATIONS\` cases from seed \`$RAW_SEED\`"
+            echo "- Snapshot mutations: \`$SNAPSHOT_MUTATIONS\` from seed \`$SNAPSHOT_SEED\`"
+            echo "- Snapshot continuation properties: \`$SNAPSHOT_PROPERTIES\`"
+            echo "- wasm-smith differential modules: \`$SMITH_MODULES\`"
+            if test -f artifacts/fuzz-evidence/summary.txt; then
+              echo
+              echo '```text'
+              cat artifacts/fuzz-evidence/summary.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reproducibility and divergence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-kwasm-fuzz
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            artifacts/
+            wasm-tck/fuzz/
+            wasm-tck/build/test-results/jvmTest/
+            wasm-tck/build/reports/tests/jvmTest/
