@@ -1,0 +1,56 @@
+# Gradle and Kotlin
+.gradle/
+.kotlin/
+**/build/
+out/
+
+# Kotlin/Native local state and binaries
+.konan/
+*.kexe
+*.klib
+
+# Android
+local.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+
+# Signing material and local credentials
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# IntelliJ IDEA / Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# JVM diagnostics
+*.hprof
+hs_err_pid*
+replay_pid*
+
+# Temporary and local-only files
+__pycache__/
+.performance-history/
+*.tmp
+*.swp
+*.swo
+*~
+.env
+.env.*
+!.env.example
