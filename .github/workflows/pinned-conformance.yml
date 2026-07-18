@@ -46,10 +46,10 @@ jobs:
 
     steps:
       - name: Check out kwasm
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check out WebAssembly spec wg-3.0
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: WebAssembly/spec
           ref: wg-3.0
@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 1
 
       - name: Check out pinned WABT
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: WebAssembly/wabt
           ref: 11602da5423eb9c7517311ed01917ea231594170
@@ -169,10 +169,10 @@ jobs:
 
     steps:
       - name: Check out kwasm
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check out pinned official WASI testsuite
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: WebAssembly/wasi-testsuite
           ref: caf3b66fa3457cc17156864d971387a7e9f5933b
