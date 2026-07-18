@@ -1,0 +1,3 @@
+headers = kwasm_wasi_native_fs.h
+headerFilter = kwasm_wasi_native_fs.h
+package = io.heapy.kwasm.wasi.nativeinterop
