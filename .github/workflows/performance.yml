@@ -37,7 +37,7 @@ jobs:
 
       - name: Restore JVM self-history
         id: history
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: benchmarks/.performance-history/jvm.json
           key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Save successful JVM history
         if: success() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: benchmarks/.performance-history/jvm.json
           key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
@@ -115,7 +115,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Restore Native self-history
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: benchmarks/.performance-history/${{ matrix.target }}.json
           key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
@@ -151,7 +151,7 @@ jobs:
 
       - name: Save successful Native history
         if: success() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: benchmarks/.performance-history/${{ matrix.target }}.json
           key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
