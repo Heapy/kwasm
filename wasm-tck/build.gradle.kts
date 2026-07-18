@@ -653,6 +653,14 @@ val fuzzAllowNoCallableExports =
     providers.gradleProperty("kwasm.fuzz.allowNoCallableExports").orElse("false")
 val fuzzWasmtime = providers.gradleProperty("kwasm.fuzz.wasmtime").orElse("wasmtime")
 val fuzzWasmtimeVersion = providers.gradleProperty("kwasm.fuzz.wasmtimeVersion")
+// Optional wasm3 interpreter oracle (github.com/wasm3/wasm3). Unlike
+// wasm3Wast2JsonArguments above (WABT flags for the Wasm 3.0 *spec*), these
+// properties target the wasm3 *interpreter*. All four are optional: a local
+// default run stays offline with no wasm3 binary on PATH.
+val fuzzWasm3 = providers.gradleProperty("kwasm.fuzz.wasm3")
+val fuzzWasm3Version = providers.gradleProperty("kwasm.fuzz.wasm3Version")
+val fuzzWasm3Secondary = providers.gradleProperty("kwasm.fuzz.wasm3Secondary")
+val fuzzWasm3SecondaryVersion = providers.gradleProperty("kwasm.fuzz.wasm3SecondaryVersion")
 val fuzzArtifacts = providers.gradleProperty("kwasm.fuzz.artifactsDir")
     .map(rootProject::file)
     .orElse(layout.buildDirectory.dir("fuzz-artifacts").map { it.asFile })
@@ -695,6 +703,22 @@ val nightlyFuzz = tasks.register<JavaExec>("nightlyFuzz") {
         "wasmtimeVersion",
         fuzzWasmtimeVersion.map { it }.orElse("<not-pinned-by-caller>"),
     )
+    inputs.property(
+        "wasm3",
+        fuzzWasm3.map { it }.orElse("<not-configured>"),
+    )
+    inputs.property(
+        "wasm3Version",
+        fuzzWasm3Version.map { it }.orElse("<not-pinned-by-caller>"),
+    )
+    inputs.property(
+        "wasm3Secondary",
+        fuzzWasm3Secondary.map { it }.orElse("<not-configured>"),
+    )
+    inputs.property(
+        "wasm3SecondaryVersion",
+        fuzzWasm3SecondaryVersion.map { it }.orElse("<not-pinned-by-caller>"),
+    )
     inputs.property("maximumModules", fuzzMaximumModules)
     inputs.property("maximumInvocations", fuzzMaximumInvocations)
     inputs.property("maximumModuleBytes", fuzzMaximumModuleBytes)
@@ -712,6 +736,20 @@ val nightlyFuzz = tasks.register<JavaExec>("nightlyFuzz") {
         rootProject.file(executablePath).takeIf(File::isFile)?.let { executable ->
             inputs.file(executable)
                 .withPropertyName("wasmtimeBinary")
+                .withPathSensitivity(PathSensitivity.NONE)
+        }
+    }
+    fuzzWasm3.orNull?.let { executablePath ->
+        rootProject.file(executablePath).takeIf(File::isFile)?.let { executable ->
+            inputs.file(executable)
+                .withPropertyName("wasm3Binary")
+                .withPathSensitivity(PathSensitivity.NONE)
+        }
+    }
+    fuzzWasm3Secondary.orNull?.let { executablePath ->
+        rootProject.file(executablePath).takeIf(File::isFile)?.let { executable ->
+            inputs.file(executable)
+                .withPropertyName("wasm3SecondaryBinary")
                 .withPathSensitivity(PathSensitivity.NONE)
         }
     }
@@ -763,6 +801,19 @@ val nightlyFuzz = tasks.register<JavaExec>("nightlyFuzz") {
             }
             fuzzWasmtimeVersion.orNull?.let { version ->
                 addAll(listOf("--expected-wasmtime-version", version))
+            }
+            // wasm3 is an optional oracle; emit its flags only when configured.
+            fuzzWasm3.orNull?.let { executable ->
+                addAll(listOf("--wasm3", executable))
+                fuzzWasm3Version.orNull?.let { version ->
+                    addAll(listOf("--expected-wasm3-version", version))
+                }
+            }
+            fuzzWasm3Secondary.orNull?.let { executable ->
+                addAll(listOf("--wasm3-secondary", executable))
+                fuzzWasm3SecondaryVersion.orNull?.let { version ->
+                    addAll(listOf("--expected-wasm3-secondary-version", version))
+                }
             }
             if (fuzzRequireDifferential.get().toBooleanStrict()) {
                 add("--require-differential")

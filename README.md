@@ -50,7 +50,7 @@ The implementation contract and requirement IDs live in
 | `:bindgen-ksp` | KSP processor for host/guest boundary source generation |
 | `:bindgen-runtime` | kwasm `Instance` and linear-memory adapter for generated host clients |
 | `:gradle-plugin` | Guest build discovery, binding preparation, and resource embedding |
-| `:tck` | `wast2json` model/runner, tracked exclusions, and fuzz/differential seams |
+| `:tck` | `wast2json` model/runner, tracked exclusions, and fuzz/differential seams (wasmtime + wasm3 oracles) |
 | `:benchmarks` | JVM/Native performance evidence, normalized history, and regression gates |
 | `:test-support-wat` | Small WAT composer used only by tests and samples |
 | `:samples-cli` | End-to-end JVM smoke program |
@@ -350,9 +350,11 @@ caller-aware `begin`/`finish` imports. Variable-length results are retained in
 a bounded, caller-scoped pending table and copied into guest memory exactly
 once. Linked `wasmJs` and `wasmWasi` binaries verify the compiler-facing
 contract, and the `wasmWasi` binary is decoded, validated, instantiated, and
-executed by kwasm in the JVM compatibility test. The compiler gate builds that
-same fixture with pinned Kotlin `2.4.0` and previous stable `2.3.21` in an
-isolated copy, then requires proof that both rows executed; see
+executed by kwasm in the JVM compatibility test. The compiler gate builds the
+same pinned corpus with Kotlin `2.4.0` and previous stable `2.3.21`, in both
+legacy and standardized exception-handling modes. Every row exercises WASI
+hello-world/stdlib behavior, a JSON round-trip, exception-heavy control flow,
+and the generated bindgen boundary; see
 [the compatibility guide](wasm-bindgen-runtime/KOTLIN_WASM_COMPATIBILITY.md).
 
 Pending bindgen results are portable, bounded host-participant state. A

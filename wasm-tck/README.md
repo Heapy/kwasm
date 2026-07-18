@@ -103,6 +103,16 @@ differential job can adapt `wasm-tools smith`, wasmtime, and the reference
 interpreter through `DifferentialEngine`; no external process API leaks into
 the common harness.
 
+The nightly job also runs the **wasm3 interpreter**
+(<https://github.com/wasm3/wasm3>) as a second oracle alongside wasmtime, built
+from source under two pinned refs (the stable `v0.5.0` tag and a frozen `main`
+commit) for triangulation. Source trees are content-pinned via SHA-256 of the
+GitHub archive tarball. wasm3 abstains from `f32`/`f64` invocations because its
+CLI prints floats through lossy `%.7g`/`%.15g` formatting; `DifferentialDriver`
+excludes abstained engines from divergence detection so they can never be the
+sole cause of a finding. Pass `-Pkwasm.fuzz.wasm3=<path>` (and optionally
+`-Pkwasm.fuzz.wasm3Secondary=<path>`) to opt in locally.
+
 The default pull-request CI remains offline and does not vendor or download an
 upstream corpus. A manually configured local run tests exactly the checkout and
 `wast2json` executable supplied by the caller. Unsupported proposal

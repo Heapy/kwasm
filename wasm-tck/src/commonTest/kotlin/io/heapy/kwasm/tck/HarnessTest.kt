@@ -16,6 +16,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class HarnessTest {
@@ -259,6 +260,41 @@ class HarnessTest {
         assertTrue(driver.compare(byteArrayOf(1, 2), DifferentialInvocation("f")) != null)
         val minimized = driver.minimize(byteArrayOf(0, 1, 2, 3)) { bytes -> 3 in bytes }
         assertTrue(minimized.contentEquals(byteArrayOf(3)))
+    }
+
+    @Test
+    fun differentialDriverIgnoresAbstainedEnginesWhenOthersAgree() = runBlocking {
+        // An abstained engine (e.g. wasm3 on float results) must never be the
+        // sole cause of a divergence: when all non-abstained engines agree,
+        // compare returns null even if an abstained engine is present.
+        val driver = DifferentialDriver(
+            mapOf(
+                "kwasm" to DifferentialEngine { _, _ -> DifferentialResult.Returned(listOf("i32:5")) },
+                "wasmtime-46" to DifferentialEngine { _, _ -> DifferentialResult.Returned(listOf("i32:5")) },
+                "wasm3-0.5.0" to DifferentialEngine { _, _ ->
+                    DifferentialResult.Abstained("wasm3-prints-float-with-lossy-precision")
+                },
+            ),
+        )
+        assertNull(driver.compare(byteArrayOf(1, 2), DifferentialInvocation("f")))
+    }
+
+    @Test
+    fun differentialDriverStillDivergesWhenAbstainedEnginesFlankDisagreement() = runBlocking {
+        // Abstention does not mask a real divergence between non-abstained engines.
+        val driver = DifferentialDriver(
+            mapOf(
+                "kwasm" to DifferentialEngine { _, _ -> DifferentialResult.Returned(listOf("i32:5")) },
+                "wasmtime-46" to DifferentialEngine { _, _ -> DifferentialResult.Returned(listOf("i32:6")) },
+                "wasm3-0.5.0" to DifferentialEngine { _, _ ->
+                    DifferentialResult.Abstained("wasm3-prints-float-with-lossy-precision")
+                },
+            ),
+        )
+        val divergence = driver.compare(byteArrayOf(1, 2), DifferentialInvocation("f"))
+        assertNotNull(divergence)
+        // The abstained outcome is still recorded in the divergence map for evidence.
+        assertTrue(divergence.outcomes["wasm3-0.5.0"] is DifferentialResult.Abstained)
     }
 
     @Test

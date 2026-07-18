@@ -63,6 +63,16 @@ internal data class NightlyFuzzConfiguration(
     val requireCallableExports: Boolean = true,
     val wasmtimeExecutable: String = "wasmtime",
     val expectedWasmtimeVersion: String? = null,
+    /**
+     * Optional primary wasm3 interpreter executable (the interpreter at
+     * github.com/wasm3/wasm3, NOT the Wasm 3.0 spec). `null` disables the
+     * wasm3 oracle, keeping local runs free of external binary dependencies.
+     */
+    val wasm3Executable: String? = null,
+    val expectedWasm3Version: String? = null,
+    /** Optional secondary wasm3 build (typically `main` HEAD) for dual-version triangulation. */
+    val wasm3SecondaryExecutable: String? = null,
+    val expectedWasm3SecondaryVersion: String? = null,
     val artifactDirectory: Path = Path.of("build", "fuzz-artifacts"),
     val maximumModules: Int = 256,
     val maximumInvocationsPerModule: Int = 4,
@@ -111,6 +121,36 @@ internal data class NightlyFuzzConfiguration(
         }
         require(expectedWasmtimeVersion?.isNotBlank() != false) {
             "expected wasmtime version must not be blank"
+        }
+        // wasm3 is an optional oracle; when configured, both executable and
+        // expected version must be present (a version-less reference runtime
+        // cannot be reproduced). Secondary is only allowed together with primary.
+        require(wasm3Executable?.isNotBlank() != false) {
+            "wasm3 executable must not be blank"
+        }
+        require(wasm3SecondaryExecutable?.isNotBlank() != false) {
+            "wasm3 secondary executable must not be blank"
+        }
+        // Cross-field wasm3 relationships are validated in
+        // [validateCrossFieldOptions] at the end of [parse], because the
+        // incremental copy() in parse re-runs init on every flag and the
+        // expected-version flag may legitimately not have been seen yet.
+    }
+
+    /**
+     * Cross-field checks that depend on more than one option at once. Called
+     * once at the end of [parse]; safe to call on a default-constructed
+     * instance (it passes trivially when wasm3 is unconfigured).
+     */
+    internal fun validateCrossFieldOptions() {
+        require(wasm3Executable == null || !expectedWasm3Version.isNullOrBlank()) {
+            "--wasm3 requires --expected-wasm3-version"
+        }
+        require(wasm3SecondaryExecutable == null || wasm3Executable != null) {
+            "--wasm3-secondary requires --wasm3"
+        }
+        require(wasm3SecondaryExecutable == null || !expectedWasm3SecondaryVersion.isNullOrBlank()) {
+            "--wasm3-secondary requires --expected-wasm3-secondary-version"
         }
         require(!requireDifferential || corpusDirectory != null) {
             "--require-differential requires --corpus"
@@ -166,6 +206,14 @@ internal data class NightlyFuzzConfiguration(
                             configuration.copy(wasmtimeExecutable = value(option))
                         "--expected-wasmtime-version" ->
                             configuration.copy(expectedWasmtimeVersion = value(option))
+                        "--wasm3" ->
+                            configuration.copy(wasm3Executable = value(option))
+                        "--expected-wasm3-version" ->
+                            configuration.copy(expectedWasm3Version = value(option))
+                        "--wasm3-secondary" ->
+                            configuration.copy(wasm3SecondaryExecutable = value(option))
+                        "--expected-wasm3-secondary-version" ->
+                            configuration.copy(expectedWasm3SecondaryVersion = value(option))
                         "--artifacts" ->
                             configuration.copy(artifactDirectory = Path.of(value(option)))
                         "--max-modules" ->
@@ -188,6 +236,9 @@ internal data class NightlyFuzzConfiguration(
                     }
                 index++
             }
+            // Cross-field checks run once after all flags are parsed; running
+            // them in init would trip on the incremental copy() steps above.
+            configuration.validateCrossFieldOptions()
             return configuration
         }
 
@@ -304,7 +355,7 @@ internal object WasmtimeOutputParser {
         requireInfrastructureCompletion(output, "wasmtime --version")
         if (output.exitCode != 0 || output.stderr.isNotBlank()) {
             throw FuzzInfrastructureException(
-                "wasmtime --version failed: ${stableDiagnostic(output)}",
+                "wasmtime --version failed: ${stableProcessDiagnostic(output)}",
             )
         }
         val line = output.stdout.trim()
@@ -368,7 +419,7 @@ internal object WasmtimeOutputParser {
             }
         if (phase != null) return DifferentialResult.Rejected(phase)
         throw FuzzInfrastructureException(
-            "unrecognized wasmtime failure (exit ${output.exitCode}): ${stableDiagnostic(output)}",
+            "unrecognized wasmtime failure (exit ${output.exitCode}): ${stableProcessDiagnostic(output)}",
         )
     }
 
@@ -377,53 +428,10 @@ internal object WasmtimeOutputParser {
         if (output.exitCode != 0) {
             throw FuzzInfrastructureException(
                 "pinned wasmtime rejected a supposedly valid generated module: " +
-                    stableDiagnostic(output),
+                    stableProcessDiagnostic(output),
             )
         }
     }
-
-    private fun requireInfrastructureCompletion(output: CapturedProcessOutput, operation: String) {
-        if (output.timedOut) {
-            throw FuzzInfrastructureException("$operation exceeded its host process timeout")
-        }
-        if (output.stdoutTruncated || output.stderrTruncated) {
-            throw FuzzInfrastructureException("$operation exceeded its captured-output limit")
-        }
-    }
-
-    private fun normalizeReferenceScalar(type: String, source: String): String =
-        when (type) {
-            "i32" -> "i32:${source.toInt()}"
-            "i64" -> "i64:${source.toLong()}"
-            "f32" -> normalizeF32(parseF32(source))
-            "f64" -> normalizeF64(parseF64(source))
-            else -> throw FuzzInfrastructureException("unsupported reference result type '$type'")
-        }
-
-    private fun parseF32(source: String): Float =
-        when (source.lowercase()) {
-            "nan", "+nan", "-nan" -> Float.NaN
-            "inf", "+inf", "infinity", "+infinity" -> Float.POSITIVE_INFINITY
-            "-inf", "-infinity" -> Float.NEGATIVE_INFINITY
-            else -> source.toFloat()
-        }
-
-    private fun parseF64(source: String): Double =
-        when (source.lowercase()) {
-            "nan", "+nan", "-nan" -> Double.NaN
-            "inf", "+inf", "infinity", "+infinity" -> Double.POSITIVE_INFINITY
-            "-inf", "-infinity" -> Double.NEGATIVE_INFINITY
-            else -> source.toDouble()
-        }
-
-    private fun stableDiagnostic(output: CapturedProcessOutput): String =
-        (output.stderr.ifBlank { output.stdout })
-            .lineSequence()
-            .map(String::trim)
-            .filter(String::isNotEmpty)
-            .take(8)
-            .joinToString(" | ")
-            .take(1_024)
 }
 
 internal class KwasmDifferentialEngine(
@@ -502,6 +510,10 @@ internal class KwasmDifferentialEngine(
     }
 }
 
+// Note: this parser is for the wasm3 *interpreter* (github.com/wasm3/wasm3).
+// It is unrelated to wasm3Wast2JsonArguments in build.gradle.kts, which are
+// WABT feature flags for the Wasm 3.0 *spec proposal*.
+
 internal class WasmtimeDifferentialEngine(
     private val configuration: NightlyFuzzConfiguration,
     private val processRunner: BoundedProcessRunner,
@@ -575,6 +587,213 @@ internal class WasmtimeDifferentialEngine(
     }
 }
 
+/**
+ * Differential engine backed by the wasm3 interpreter CLI
+ * (`wasm3 --func <name> <module> [args...]`). Unrelated to the
+ * `wasm3Wast2JsonArguments` build flag, which targets the Wasm 3.0 spec.
+ *
+ * wasm3 has no CLI knobs for fuel or memory caps (it is an embedded runtime;
+ * such limits are API-only), so execution is bounded only by
+ * [NightlyFuzzConfiguration.processTimeoutMillis]. This is acceptable for a
+ * nightly oracle whose purpose is cross-engine agreement, not DoS hardening.
+ */
+internal class Wasm3DifferentialEngine(
+    private val configuration: NightlyFuzzConfiguration,
+    private val processRunner: BoundedProcessRunner,
+    private val temporaryDirectory: Path,
+    private val executable: String,
+    private val expectedVersion: String? = null,
+) : DifferentialEngine {
+    override suspend fun execute(
+        module: ByteArray,
+        invocation: DifferentialInvocation,
+    ): DifferentialResult {
+        // wasm3 prints floats via lossy `%.7g`/`%.15g` formatting in its
+        // repl_call path, which loses denormals and trailing precision bits.
+        // Abstain from float-bearing invocations rather than emit false
+        // divergences; DifferentialDriver.compare filters abstained engines.
+        if (invocation.resultTypes.any { it == "f32" || it == "f64" }) {
+            return DifferentialResult.Abstained("wasm3-prints-float-with-lossy-precision")
+        }
+        return try {
+            withTimeout(configuration.processTimeoutMillis) {
+                executeBounded(module, invocation)
+            }
+        } catch (_: TimeoutCancellationException) {
+            throw FuzzInfrastructureException(
+                "wasm3 invocation exceeded ${configuration.processTimeoutMillis} ms",
+            )
+        }
+    }
+
+    private suspend fun executeBounded(
+        module: ByteArray,
+        invocation: DifferentialInvocation,
+    ): DifferentialResult {
+        val moduleFile = Files.createTempFile(temporaryDirectory, "wasm3-invoke-", ".wasm")
+        try {
+            Files.write(moduleFile, module)
+            val output = processRunner.run(
+                command = buildList {
+                    add(executable)
+                    add("--func")
+                    add(invocation.export)
+                    add(moduleFile.toAbsolutePath().pathString)
+                    addAll(invocation.arguments)
+                },
+                timeout = Duration.ofMillis(configuration.processTimeoutMillis + 1_000),
+                workingDirectory = temporaryDirectory,
+            )
+            return Wasm3OutputParser.parseInvocation(output, invocation.resultTypes)
+        } finally {
+            Files.deleteIfExists(moduleFile)
+        }
+    }
+
+    fun verifyVersion(): String {
+        val output = processRunner.run(
+            listOf(executable, "--version"),
+            Duration.ofMillis(configuration.processTimeoutMillis),
+        )
+        val actual = Wasm3OutputParser.parseVersion(output)
+        if (expectedVersion != null && actual != expectedVersion) {
+            throw FuzzInfrastructureException(
+                "wasm3 version mismatch: expected $expectedVersion, found $actual",
+            )
+        }
+        return actual
+    }
+}
+
+internal object Wasm3OutputParser {
+    private val version = Regex("""^\s*wasm3\s+v?([0-9]+\.[0-9]+\.[0-9]+)(?:\s.*)?$""", RegexOption.IGNORE_CASE)
+
+    fun parseVersion(output: CapturedProcessOutput): String {
+        requireInfrastructureCompletion(output, "wasm3 --version")
+        if (output.exitCode != 0) {
+            throw FuzzInfrastructureException(
+                "wasm3 --version failed: ${stableProcessDiagnostic(output)}",
+            )
+        }
+        val line = output.stdout.lineSequence()
+            .map(String::trim)
+            .firstOrNull { it.isNotEmpty() }
+            ?: throw FuzzInfrastructureException("wasm3 --version produced no output")
+        return version.matchEntire(line)?.groupValues?.get(1)
+            ?: throw FuzzInfrastructureException(
+                "unrecognized wasm3 version output: '${line.take(256)}'",
+            )
+    }
+
+    /**
+     * wasm3 prints scalar results to **stderr** (not stdout) with the prefix
+     * `Result: ` via its `repl_call` path (`platforms/app/main.c`). Multi-value
+     * results are comma-separated on a single line. Traps appear as
+     * `[trap] <text>` on stderr; decode/validation/link errors use other shapes.
+     */
+    fun parseInvocation(
+        output: CapturedProcessOutput,
+        resultTypes: List<String>,
+    ): DifferentialResult {
+        requireInfrastructureCompletion(output, "wasm3 invocation")
+        if (output.exitCode == 0) {
+            // wasm3 writes `Result: <v>` per result line on stderr; stdout is
+            // unused by --func invocations and any non-empty line there is
+            // treated as infrastructure noise.
+            if (output.stdout.isNotBlank()) {
+                throw FuzzInfrastructureException(
+                    "wasm3 wrote unexpected stdout: ${output.stdout.take(512)}",
+                )
+            }
+            val resultLines = output.stderr.lineSequence()
+                .map(String::trim)
+                .filter { it.startsWith("Result:") }
+                .toList()
+            // Each emitted result line may carry multiple comma-separated
+            // values; flatten them preserving order.
+            val values = resultLines.flatMap { line ->
+                line.removePrefix("Result:").trim()
+                    .split(",")
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+            }
+            if (values.size != resultTypes.size) {
+                throw FuzzInfrastructureException(
+                    "wasm3 returned ${values.size} value(s), expected ${resultTypes.size}: " +
+                        output.stderr.take(512),
+                )
+            }
+            return DifferentialResult.Returned(
+                values.zip(resultTypes).map { (value, type) ->
+                    normalizeReferenceScalar(type, value)
+                },
+            )
+        }
+
+        val diagnostic = (output.stderr + "\n" + output.stdout).lowercase()
+        canonicalWasm3Trap(diagnostic)?.let { return DifferentialResult.Trapped(it) }
+        val phase =
+            when {
+                "incompatible wasm binary version" in diagnostic ||
+                    "invalid module" in diagnostic ||
+                    "section" in diagnostic && "out of range" in diagnostic -> "decode"
+                "missing required" in diagnostic ||
+                    "validation" in diagnostic ||
+                    "type mismatch" in diagnostic -> "validation"
+                "unresolved import" in diagnostic ||
+                    "import" in diagnostic && "not linked" in diagnostic -> "link"
+                "module not loaded" in diagnostic -> "instantiation"
+                "missing function" in diagnostic ||
+                    "function not found" in diagnostic -> "export"
+                else -> null
+            }
+        if (phase != null) return DifferentialResult.Rejected(phase)
+        throw FuzzInfrastructureException(
+            "unrecognized wasm3 failure (exit ${output.exitCode}): ${stableProcessDiagnostic(output)}",
+        )
+    }
+
+    fun requireSuccessfulLoad(output: CapturedProcessOutput) {
+        requireInfrastructureCompletion(output, "wasm3 load")
+        if (output.exitCode != 0) {
+            throw FuzzInfrastructureException(
+                "pinned wasm3 rejected a supposedly valid generated module: " +
+                    stableProcessDiagnostic(output),
+            )
+        }
+    }
+}
+
+/**
+ * Maps wasm3's `[trap] ...` strings to the canonical trap vocabulary shared
+ * with [canonicalTrap]. Separate from the wasmtime-oriented [canonicalTrap]
+ * overload because wasm3 uses stable, prefixed strings (`[trap] ...`) rather
+ * than prose, so exact matching is preferred over substring heuristics.
+ */
+internal fun canonicalWasm3Trap(diagnostic: String): String? {
+    val trapMarker = "[trap]"
+    val trapIndex = diagnostic.indexOf(trapMarker)
+    if (trapIndex < 0) return null
+    val rest = diagnostic.substring(trapIndex + trapMarker.length).trim()
+    return when {
+        rest.startsWith("out of bounds memory access") -> "out_of_bounds_memory"
+        rest.startsWith("integer divide by zero") -> "integer_divide_by_zero"
+        rest.startsWith("integer overflow") -> "integer_overflow"
+        rest.startsWith("invalid conversion to integer") -> "invalid_conversion_to_integer"
+        rest.startsWith("indirect call type mismatch") -> "indirect_call_type_mismatch"
+        rest.startsWith("undefined element") -> "undefined_element"
+        rest.startsWith("null table element") -> "uninitialized_element"
+        rest.startsWith("unreachable executed") -> "unreachable"
+        rest.startsWith("stack overflow") -> "call_stack_exhausted"
+        // program called exit/abort are wasm3-specific signals for WASI
+        // proc_exit/abort; recorded as distinct canonicals so a divergence
+        // on them is minimized as a real finding rather than an infra error.
+        rest.startsWith("program called exit") -> "program_exit"
+        rest.startsWith("program called abort") -> "program_abort"
+        else -> null
+    }
+}
+
 internal class NightlyFuzzGate(
     private val configuration: NightlyFuzzConfiguration,
 ) {
@@ -623,6 +842,7 @@ internal class NightlyFuzzGate(
                 differentialDivergences = 0,
                 modulesWithoutCallableExports = 0,
                 wasmtimeVersion = null,
+                wasm3Versions = emptyList(),
                 corpusTruncated = false,
             )
             evidence.writeSummary(summary.describe())
@@ -677,11 +897,52 @@ internal class NightlyFuzzGate(
                 temporaryDirectory.toFile().deleteRecursively()
                 throw failure
             }
+        // Optional wasm3 oracle (primary + optional secondary build). When
+        // absent the differential comparison stays kwasm-vs-wasmtime; when
+        // present each configured build is version-verified before any module
+        // runs, so a stale or mislabeled wasm3 binary fails fast.
+        val wasm3Engines = linkedMapOf<String, DifferentialEngine>()
+        val wasm3Versions: List<String> =
+            try {
+                val primaryPath = configuration.wasm3Executable
+                if (primaryPath != null) {
+                    val primary = Wasm3DifferentialEngine(
+                        configuration,
+                        processRunner,
+                        temporaryDirectory,
+                        executable = primaryPath,
+                        expectedVersion = configuration.expectedWasm3Version,
+                    )
+                    val primaryVersion = primary.verifyVersion()
+                    wasm3Engines["wasm3-$primaryVersion"] = primary
+                    val secondaryPath = configuration.wasm3SecondaryExecutable
+                    if (secondaryPath != null) {
+                        val secondary = Wasm3DifferentialEngine(
+                            configuration,
+                            processRunner,
+                            temporaryDirectory,
+                            executable = secondaryPath,
+                            expectedVersion = configuration.expectedWasm3SecondaryVersion,
+                        )
+                        val secondaryVersion = secondary.verifyVersion()
+                        wasm3Engines["wasm3-$secondaryVersion"] = secondary
+                        listOf(primaryVersion, secondaryVersion)
+                    } else {
+                        listOf(primaryVersion)
+                    }
+                } else {
+                    emptyList()
+                }
+            } catch (failure: Exception) {
+                evidence.writeRunFailure("wasm3 reference runtime verification failed", failure)
+                temporaryDirectory.toFile().deleteRecursively()
+                throw failure
+            }
         val driver = DifferentialDriver(
             linkedMapOf(
                 "kwasm" to KwasmDifferentialEngine(configuration),
                 "wasmtime-$wasmtimeVersion" to wasmtime,
-            ),
+            ).apply { putAll(wasm3Engines) },
         )
         try {
             modules.take(configuration.maximumModules).forEachIndexed { moduleIndex, path ->
@@ -805,6 +1066,7 @@ internal class NightlyFuzzGate(
             differentialDivergences = divergenceCount,
             modulesWithoutCallableExports = noCallableCount,
             wasmtimeVersion = wasmtimeVersion,
+            wasm3Versions = wasm3Versions,
             corpusTruncated = modules.size > configuration.maximumModules,
         )
         evidence.writeSummary(summary.describe())
@@ -824,6 +1086,7 @@ internal data class NightlyFuzzSummary(
     val differentialDivergences: Int,
     val modulesWithoutCallableExports: Int,
     val wasmtimeVersion: String?,
+    val wasm3Versions: List<String> = emptyList(),
     val corpusTruncated: Boolean,
 ) {
     fun describe(): String =
@@ -837,8 +1100,11 @@ internal data class NightlyFuzzSummary(
             if (wasmtimeVersion == null) {
                 append("kwasm differential fuzz: not configured")
             } else {
+                val wasm3Part =
+                    if (wasm3Versions.isEmpty()) ""
+                    else ", wasm3=${wasm3Versions.joinToString(",")}"
                 append(
-                    "kwasm differential fuzz: wasmtime=$wasmtimeVersion, " +
+                    "kwasm differential fuzz: wasmtime=$wasmtimeVersion$wasm3Part, " +
                         "modules=$differentialModules, invocations=$differentialInvocations, " +
                         "divergences=$differentialDivergences, " +
                         "withoutCallableExports=$modulesWithoutCallableExports, " +
@@ -1063,6 +1329,61 @@ private fun normalizeF64(value: Double): String =
         "f64:0x${value.toRawBits().toULong().toString(16).padStart(16, '0')}"
     }
 
+/**
+ * Shared infrastructure checks used by every reference CLI parser
+ * ([WasmtimeOutputParser], [Wasm3OutputParser]). Ensures the subprocess
+ * neither timed out nor overflowed the captured-output budget before any
+ * caller inspects its streams.
+ */
+internal fun requireInfrastructureCompletion(output: CapturedProcessOutput, operation: String) {
+    if (output.timedOut) {
+        throw FuzzInfrastructureException("$operation exceeded its host process timeout")
+    }
+    if (output.stdoutTruncated || output.stderrTruncated) {
+        throw FuzzInfrastructureException("$operation exceeded its captured-output limit")
+    }
+}
+
+/** Stable, path- and backtrace-free one-line summary of a captured CLI failure. */
+internal fun stableProcessDiagnostic(output: CapturedProcessOutput): String =
+    (output.stderr.ifBlank { output.stdout })
+        .lineSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .take(8)
+        .joinToString(" | ")
+        .take(1_024)
+
+/**
+ * Normalizes a textual scalar emitted by a reference CLI (wasmtime or wasm3)
+ * into the canonical `type:bitpattern` form used for cross-engine comparison.
+ * Shared so that both engines go through identical parsing/normalization.
+ */
+internal fun normalizeReferenceScalar(type: String, source: String): String =
+    when (type) {
+        "i32" -> "i32:${source.toInt()}"
+        "i64" -> "i64:${source.toLong()}"
+        "f32" -> normalizeF32(parseF32(source))
+        "f64" -> normalizeF64(parseF64(source))
+        else -> throw FuzzInfrastructureException("unsupported reference result type '$type'")
+    }
+
+internal fun parseF32(source: String): Float =
+    when (source.lowercase()) {
+        "nan", "+nan", "-nan" -> Float.NaN
+        "inf", "+inf", "infinity", "+infinity" -> Float.POSITIVE_INFINITY
+        "-inf", "-infinity" -> Float.NEGATIVE_INFINITY
+        else -> source.toFloat()
+    }
+
+internal fun parseF64(source: String): Double =
+    when (source.lowercase()) {
+        "nan", "+nan", "-nan" -> Double.NaN
+        "inf", "+inf", "infinity", "+infinity" -> Double.POSITIVE_INFINITY
+        "-inf", "-infinity" -> Double.NEGATIVE_INFINITY
+        else -> source.toDouble()
+    }
+
 internal fun canonicalTrap(kind: TrapKind): String =
     when (kind) {
         TrapKind.UNREACHABLE -> "unreachable"
@@ -1119,6 +1440,7 @@ private fun renderOutcome(outcome: DifferentialResult): String =
         is DifferentialResult.Returned -> "returned:${outcome.values.joinToString(",")}"
         is DifferentialResult.Trapped -> "trapped:${outcome.kind}"
         is DifferentialResult.Rejected -> "rejected:${outcome.phase}"
+        is DifferentialResult.Abstained -> "abstained:${outcome.reason}"
     }
 
 private fun stableFailure(failure: Throwable): String =

@@ -29,6 +29,10 @@ class NightlyFuzzTest {
                 "--allow-no-callable-exports",
                 "--wasmtime", "/tools/wasmtime",
                 "--expected-wasmtime-version", "46.0.1",
+                "--wasm3", "/tools/wasm3-stable/wasm3",
+                "--expected-wasm3-version", "0.5.0",
+                "--wasm3-secondary", "/tools/wasm3-main/wasm3",
+                "--expected-wasm3-secondary-version", "d77cd814",
                 "--artifacts", "evidence",
                 "--max-modules", "23",
                 "--max-invocations-per-module", "2",
@@ -52,6 +56,10 @@ class NightlyFuzzTest {
         assertFalse(configured.requireCallableExports)
         assertEquals("/tools/wasmtime", configured.wasmtimeExecutable)
         assertEquals("46.0.1", configured.expectedWasmtimeVersion)
+        assertEquals("/tools/wasm3-stable/wasm3", configured.wasm3Executable)
+        assertEquals("0.5.0", configured.expectedWasm3Version)
+        assertEquals("/tools/wasm3-main/wasm3", configured.wasm3SecondaryExecutable)
+        assertEquals("d77cd814", configured.expectedWasm3SecondaryVersion)
         assertEquals(Path.of("evidence"), configured.artifactDirectory)
         assertEquals(23, configured.maximumModules)
         assertEquals(2, configured.maximumInvocationsPerModule)
@@ -70,6 +78,20 @@ class NightlyFuzzTest {
         }
         assertFailsWith<IllegalArgumentException> {
             NightlyFuzzConfiguration.parse(listOf("--raw-iterations", "-1"))
+        }
+        // wasm3 without an expected version is rejected: a version-less
+        // reference runtime cannot be reproduced or triaged.
+        assertFailsWith<IllegalArgumentException> {
+            NightlyFuzzConfiguration.parse(listOf("--wasm3", "/tools/wasm3"))
+        }
+        // wasm3 secondary requires the primary oracle too.
+        assertFailsWith<IllegalArgumentException> {
+            NightlyFuzzConfiguration.parse(
+                listOf(
+                    "--wasm3-secondary", "/tools/wasm3-main/wasm3",
+                    "--expected-wasm3-secondary-version", "abc123",
+                ),
+            )
         }
     }
 
@@ -168,6 +190,157 @@ class NightlyFuzzTest {
                 ),
             )
         }
+    }
+
+    // --- wasm3 interpreter parser tests (mirror the wasmtime tests above) ---
+    // The wasm3 interpreter (github.com/wasm3/wasm3) prints scalar results
+    // on *stderr* with a `Result: ` prefix, unlike wasmtime which uses stdout.
+
+    @Test
+    fun parsesWasm3ScalarOutputFromStderrIntoStableTypedValues() {
+        val parsed = Wasm3OutputParser.parseInvocation(
+            CapturedProcessOutput(
+                command = listOf("wasm3"),
+                exitCode = 0,
+                timedOut = false,
+                stdout = "",
+                stderr = "Result: -1\nResult: 9223372036854775807\n",
+            ),
+            listOf("i32", "i64"),
+        )
+        assertEquals(
+            DifferentialResult.Returned(listOf("i32:-1", "i64:9223372036854775807")),
+            parsed,
+        )
+    }
+
+    @Test
+    fun parsesWasm3MultiValueResultAsCommaSeparatedOnOneLine() {
+        val parsed = Wasm3OutputParser.parseInvocation(
+            CapturedProcessOutput(
+                command = listOf("wasm3"),
+                exitCode = 0,
+                timedOut = false,
+                stdout = "",
+                stderr = "Result: 7, 42\n",
+            ),
+            listOf("i32", "i32"),
+        )
+        assertEquals(
+            DifferentialResult.Returned(listOf("i32:7", "i32:42")),
+            parsed,
+        )
+    }
+
+    @Test
+    fun normalizesWasm3TrapsViaCanonicalWasm3TrapTable() {
+        // `[trap] unreachable executed` lacks the `wasm trap` substring that
+        // the wasmtime-oriented canonicalTrap overload requires, so it must go
+        // through canonicalWasm3Trap to map to the canonical `unreachable`.
+        assertEquals(
+            DifferentialResult.Trapped("unreachable"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3("[trap] unreachable executed"),
+                listOf("i32"),
+            ),
+        )
+        assertEquals(
+            DifferentialResult.Trapped("integer_divide_by_zero"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3("[trap] integer divide by zero"),
+                listOf("i32"),
+            ),
+        )
+        assertEquals(
+            DifferentialResult.Trapped("call_stack_exhausted"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3("[trap] stack overflow"),
+                listOf("i32"),
+            ),
+        )
+        // program_exit / program_abort are wasm3-specific WASI signals recorded
+        // as distinct canonicals so a divergence on them is minimized as a real
+        // finding rather than treated as infrastructure noise.
+        assertEquals(
+            DifferentialResult.Trapped("program_exit"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3("[trap] program called exit"),
+                listOf("i32"),
+            ),
+        )
+        assertFailsWith<FuzzInfrastructureException> {
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3("totally unfamiliar tool failure"),
+                emptyList(),
+            )
+        }
+        assertFailsWith<FuzzInfrastructureException> {
+            Wasm3OutputParser.parseInvocation(
+                CapturedProcessOutput(
+                    command = listOf("wasm3"),
+                    exitCode = -1,
+                    timedOut = true,
+                    stdout = "",
+                    stderr = "",
+                ),
+                emptyList(),
+            )
+        }
+    }
+
+    @Test
+    fun parsesOnlyStructuredWasm3VersionOutput() {
+        // wasm3 prints `Wasm3 v0.5.2 ...` (capital W); parser is case-insensitive.
+        assertEquals(
+            "0.5.2",
+            Wasm3OutputParser.parseVersion(
+                CapturedProcessOutput(
+                    command = listOf("wasm3", "--version"),
+                    exitCode = 0,
+                    timedOut = false,
+                    stdout = "Wasm3 v0.5.2 on linux\n",
+                    stderr = "",
+                ),
+            ),
+        )
+        assertFailsWith<FuzzInfrastructureException> {
+            Wasm3OutputParser.parseVersion(
+                CapturedProcessOutput(
+                    command = listOf("wasm3", "--version"),
+                    exitCode = 0,
+                    timedOut = false,
+                    stdout = "0.5.2\n",
+                    stderr = "",
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun wasm3EngineAbstainsOnFloatResultTypesWithoutSpawning() = runBlocking {
+        // wasm3 prints floats via lossy %.7g/%.15g, which loses precision bits.
+        // The engine must abstain (and never start a subprocess) rather than
+        // emit false divergences.
+        val configuration = NightlyFuzzConfiguration(
+            rawIterations = 0,
+            snapshotMutationIterations = 0,
+            snapshotPropertyIterations = 0,
+            wasm3Executable = "/nonexistent/wasm3",
+            expectedWasm3Version = "0.5.0",
+            processTimeoutMillis = 100,
+        )
+        val engine = Wasm3DifferentialEngine(
+            configuration,
+            BoundedProcessRunner(),
+            Files.createTempDirectory("kwasm-wasm3-abstain-").also { it.toFile().deleteOnExit() },
+            executable = "/nonexistent/wasm3",
+        )
+        val result = engine.execute(
+            byteArrayOf(0x00, 0x61, 0x73, 0x6D),
+            DifferentialInvocation(export = "f", resultTypes = listOf("f32")),
+        )
+        assertIs<DifferentialResult.Abstained>(result)
+        assertEquals("wasm3-prints-float-with-lossy-precision", result.reason)
     }
 
     @Test
@@ -297,6 +470,15 @@ class NightlyFuzzTest {
     private fun failedWasmtime(stderr: String): CapturedProcessOutput =
         CapturedProcessOutput(
             command = listOf("wasmtime"),
+            exitCode = 1,
+            timedOut = false,
+            stdout = "",
+            stderr = stderr,
+        )
+
+    private fun failedWasm3(stderr: String): CapturedProcessOutput =
+        CapturedProcessOutput(
+            command = listOf("wasm3"),
             exitCode = 1,
             timedOut = false,
             stdout = "",

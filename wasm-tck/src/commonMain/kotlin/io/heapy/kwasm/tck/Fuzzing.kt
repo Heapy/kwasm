@@ -99,6 +99,15 @@ public sealed class DifferentialResult {
     public data class Returned(public val values: List<String>) : DifferentialResult()
     public data class Trapped(public val kind: String) : DifferentialResult()
     public data class Rejected(public val phase: String) : DifferentialResult()
+
+    /**
+     * The engine declined to produce a comparable outcome for this invocation.
+     * Abstained results are excluded from divergence detection in
+     * [DifferentialDriver.compare], so an abstained engine can never be the
+     * sole cause of a divergence. Example: wasm3 prints floats via lossy
+     * `%.7g`/`%.15g` formatting, so it abstains from f32/f64 invocations.
+     */
+    public data class Abstained(public val reason: String) : DifferentialResult()
 }
 
 public fun interface DifferentialEngine {
@@ -128,7 +137,11 @@ public class DifferentialDriver(private val engines: Map<String, DifferentialEng
     ): DifferentialDivergence? {
         val results = linkedMapOf<String, DifferentialResult>()
         engines.forEach { (name, engine) -> results[name] = engine.execute(module, invocation) }
-        return if (results.values.distinct().size <= 1) null
+        // Abstained engines opt out of a specific invocation (e.g. wasm3 on
+        // float results); they are excluded from divergence detection so a
+        // single abstained engine can never be the sole cause of a finding.
+        val comparable = results.filterValues { it !is DifferentialResult.Abstained }
+        return if (comparable.values.distinct().size <= 1) null
         else DifferentialDivergence(module.copyOf(), invocation, results)
     }
 

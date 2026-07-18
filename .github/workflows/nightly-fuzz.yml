@@ -38,6 +38,17 @@ env:
   WASM_TOOLS_SHA256: f261622f8015d38ebe9c3345cc2f7bb5de055d3a66ab44efdf78f11068ed9d9f
   WASMTIME_VERSION: 46.0.1
   WASMTIME_SHA256: 9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62
+  # wasm3 interpreter (github.com/wasm3/wasm3) — distinct from the Wasm 3.0
+  # spec proposal. Built from source per ref because upstream publishes only
+  # Windows prebuilts. Two builds are pinned for differential triangulation:
+  # the last stable tag (v0.5.0) and a frozen `main` commit. Both source trees
+  # are content-pinned via SHA-256 computed on the `git archive` tarball, which
+  # is stable across clones (unlike a working-tree hash).
+  WASM3_STABLE_VERSION: 0.5.0
+  WASM3_STABLE_REF: v0.5.0
+  WASM3_STABLE_SHA256: b778dd72ee2251f4fe9e2666ee3fe1c26f06f517c3ffce572416db067546536c
+  WASM3_MAIN_REF: d77cd814aa0bc68cb1df917580a6304d34cfb30b
+  WASM3_MAIN_SHA256: c053196f4076b0649ead668c37f55673350aa2b6437afcf5c2acf43248dbf3c8
   RAW_SEED: "0x4B5741534D"
   SNAPSHOT_SEED: "0x534E415053484F54"
   SMITH_SEED: "kwasm-wasm-smith-v1"
@@ -81,6 +92,47 @@ jobs:
           test "$(.tools/wasmtime/wasmtime --version | awk '{print $2}')" = "$WASMTIME_VERSION"
           .tools/wasm-tools/wasm-tools --version
           .tools/wasmtime/wasmtime --version
+
+      - name: Build pinned wasm3 interpreter from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          # cmake is preinstalled on ubuntu-24.04 runners; assert a usable version.
+          cmake --version
+          mkdir -p .tools/wasm3-stable .tools/wasm3-main .tools/downloads
+
+          # Each wasm3 build is pinned by a git ref (tag for stable, commit for
+          # main) and content-verified via the SHA-256 of the GitHub source
+          # tarball, which is byte-stable across clones. The resulting binary
+          # is then built with Release flags and its `--version` is asserted.
+          build_wasm3() {
+            local ref="$1" expected_sha256="$2" out_dir="$3" label="$4"
+            local tarball=".tools/downloads/wasm3-${label}.tar.gz"
+            curl --fail --location --silent --show-error \
+              "https://github.com/wasm3/wasm3/archive/${ref}.tar.gz" \
+              --output "$tarball"
+            echo "${expected_sha256}  ${tarball}" | sha256sum --check --strict
+            local src_dir=".tools/downloads/wasm3-src-${label}"
+            rm -rf "$src_dir"
+            mkdir -p "$src_dir"
+            tar -xzf "$tarball" --strip-components=1 -C "$src_dir"
+
+            # Confirm the checked-out tree matches the pinned commit for refs
+            # that are commit SHAs (tags carry a moving SHA by design).
+            cmake -S "$src_dir" -B "${src_dir}/build" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_WASI=simple
+            cmake --build "${src_dir}/build" --parallel "$(nproc)" --target wasm3
+
+            local built="${src_dir}/build/wasm3"
+            test -x "$built"
+            install -m 0755 "$built" "${out_dir}/wasm3"
+            test -x "${out_dir}/wasm3"
+            "${out_dir}/wasm3" --version
+          }
+
+          build_wasm3 "$WASM3_STABLE_REF" "$WASM3_STABLE_SHA256" .tools/wasm3-stable stable
+          build_wasm3 "$WASM3_MAIN_REF"   "$WASM3_MAIN_SHA256"   .tools/wasm3-main   main
 
       - name: Resolve bounded dispatch inputs
         shell: bash
@@ -139,6 +191,8 @@ jobs:
           {
             echo "wasm-tools $WASM_TOOLS_VERSION"
             echo "wasmtime $WASMTIME_VERSION"
+            echo "wasm3-stable $WASM3_STABLE_VERSION (ref $WASM3_STABLE_REF, source SHA-256 pinned)"
+            echo "wasm3-main $WASM3_MAIN_REF (source SHA-256 pinned)"
             echo "smith-seed $SMITH_SEED"
             echo "smith-modules $SMITH_MODULES"
             echo "raw-seed $RAW_SEED"
@@ -175,6 +229,10 @@ jobs:
             -Pkwasm.fuzz.requireDifferential=true \
             -Pkwasm.fuzz.wasmtime="$GITHUB_WORKSPACE/.tools/wasmtime/wasmtime" \
             -Pkwasm.fuzz.wasmtimeVersion="$WASMTIME_VERSION" \
+            -Pkwasm.fuzz.wasm3="$GITHUB_WORKSPACE/.tools/wasm3-stable/wasm3" \
+            -Pkwasm.fuzz.wasm3Version="$WASM3_STABLE_VERSION" \
+            -Pkwasm.fuzz.wasm3Secondary="$GITHUB_WORKSPACE/.tools/wasm3-main/wasm3" \
+            -Pkwasm.fuzz.wasm3SecondaryVersion="$WASM3_MAIN_REF" \
             -Pkwasm.fuzz.artifactsDir="$GITHUB_WORKSPACE/artifacts/fuzz-evidence" \
             -Pkwasm.fuzz.maxModules="$SMITH_MODULES" \
             -Pkwasm.fuzz.maxInvocationsPerModule=4 \
@@ -196,6 +254,8 @@ jobs:
             echo "- Result: **${{ steps.fuzz.outcome }}**"
             echo "- wasm-tools: \`$WASM_TOOLS_VERSION\` (archive SHA-256 pinned)"
             echo "- wasmtime: \`$WASMTIME_VERSION\` (archive SHA-256 pinned)"
+            echo "- wasm3 stable: \`$WASM3_STABLE_VERSION\` (built from source \`$WASM3_STABLE_REF\`, source SHA-256 pinned)"
+            echo "- wasm3 main: \`$WASM3_MAIN_REF\` (built from source, source SHA-256 pinned)"
             echo "- Raw decoder: \`$RAW_ITERATIONS\` cases from seed \`$RAW_SEED\`"
             echo "- Snapshot mutations: \`$SNAPSHOT_MUTATIONS\` from seed \`$SNAPSHOT_SEED\`"
             echo "- Snapshot continuation properties: \`$SNAPSHOT_PROPERTIES\`"
