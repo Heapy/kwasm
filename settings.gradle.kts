@@ -23,6 +23,8 @@ include(
     ":bindgen-ksp",
     ":bindgen-runtime",
     ":core",
+    ":footprint-baseline",
+    ":footprint-core",
     ":gradle-plugin",
     ":samples-cli",
     ":snapshot",
@@ -37,6 +39,8 @@ project(":bindgen-api").projectDir = file("wasm-bindgen-api")
 project(":bindgen-ksp").projectDir = file("wasm-bindgen-ksp")
 project(":bindgen-runtime").projectDir = file("wasm-bindgen-runtime")
 project(":core").projectDir = file("wasm-core")
+project(":footprint-baseline").projectDir = file("benchmarks/footprint/baseline")
+project(":footprint-core").projectDir = file("benchmarks/footprint/core")
 project(":gradle-plugin").projectDir = file("wasm-gradle-plugin")
 project(":samples-cli").projectDir = file("wasm-cli")
 project(":snapshot").projectDir = file("wasm-snapshot")

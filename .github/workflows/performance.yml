@@ -17,6 +17,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ios-footprint:
+    name: iOS incremental footprint
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Link paired final binaries and enforce NFR-2
+        run: bash scripts/verify-ios-core-footprint.sh
+
+      - name: Upload iOS footprint evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-footprint-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            build/ios-footprint/report.json
+            build/ios-footprint/baseline
+            build/ios-footprint/core
+
   jvm:
     name: JVM performance gates
     runs-on: ubuntu-24.04
@@ -44,6 +76,12 @@ jobs:
           restore-keys: |
             kwasm-performance-jvm-${{ runner.os }}-
 
+      - name: Prepare pinned Chasm and CoreMark fixture
+        shell: bash
+        run: |
+          coremark_path="$(scripts/prepare-benchmark-upstreams.sh)"
+          echo "KWASM_COREMARK_WASM=${coremark_path}" >> "$GITHUB_ENV"
+
       - name: Test gate and run JVM benchmark
         shell: bash
         run: |
@@ -55,9 +93,11 @@ jobs:
             )
           fi
           ./gradlew --stacktrace \
+            :benchmarks:jvmExternalComparisonReport
+          ./gradlew --stacktrace \
             :benchmarks:performanceGateToolTest \
             :benchmarks:jvmPerformanceGate \
-            -Pkwasm.benchmark.externalComparisons=benchmarks/baselines/external-unmeasured.json \
+            -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json \
             "${gate_args[@]}"
 
       - name: Stage successful JVM history
@@ -84,7 +124,10 @@ jobs:
           if-no-files-found: warn
           path: |
             benchmarks/build/reports/benchmarks/main/**/jvm.json
+            benchmarks/build/reports/benchmarks/externalComparison/**/jvm.json
             benchmarks/build/performance/current-jvm.json
+            benchmarks/build/performance/external-current-jvm.json
+            benchmarks/build/performance/external-comparisons-jvm.json
             benchmarks/build/performance/gate-jvm.json
 
   native:
@@ -122,6 +165,12 @@ jobs:
           restore-keys: |
             kwasm-performance-${{ matrix.target }}-${{ runner.os }}-
 
+      - name: Prepare pinned Chasm and CoreMark fixture
+        shell: bash
+        run: |
+          coremark_path="$(scripts/prepare-benchmark-upstreams.sh)"
+          echo "KWASM_COREMARK_WASM=${coremark_path}" >> "$GITHUB_ENV"
+
       - name: Run Native benchmark and gate
         shell: bash
         env:
@@ -134,8 +183,10 @@ jobs:
             gate_args+=("-Pkwasm.benchmark.baseline=$history")
           fi
           ./gradlew --stacktrace \
+            ":benchmarks:${KWASM_TARGET}ExternalComparisonReport"
+          ./gradlew --stacktrace \
             ":benchmarks:${KWASM_TARGET}PerformanceGate" \
-            -Pkwasm.benchmark.externalComparisons=benchmarks/baselines/external-unmeasured.json \
+            "-Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-${KWASM_TARGET}.json" \
             "${gate_args[@]}"
 
       - name: Stage successful Native history
@@ -164,7 +215,10 @@ jobs:
           if-no-files-found: warn
           path: |
             benchmarks/build/reports/benchmarks/main/**/${{ matrix.target }}.json
+            benchmarks/build/reports/benchmarks/externalComparison/**/${{ matrix.target }}.json
             benchmarks/build/performance/current-${{ matrix.target }}.json
+            benchmarks/build/performance/external-current-${{ matrix.target }}.json
+            benchmarks/build/performance/external-comparisons-${{ matrix.target }}.json
             benchmarks/build/performance/gate-${{ matrix.target }}.json
 
   native-image:

@@ -3,6 +3,7 @@ package io.heapy.kwasm
 import io.heapy.kwasm.Instr.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.math.*
 
@@ -12,6 +13,18 @@ import kotlin.math.*
  */
 @ExperimentalKwasmApi
 public class Interpreter : ResumableMachine {
+    private enum class FastInstructionResult {
+        Handled,
+        NotHandled,
+        RequiresSlowCheckpoint,
+    }
+
+    private enum class LinearHotLoopResult {
+        Complete,
+        RequiresSlowCheckpointBeforeInstruction,
+        RequiresSlowCheckpointAfterInstruction,
+    }
+
     override suspend fun invoke(
         instance: Instance,
         functionIndex: Int,
@@ -34,7 +47,7 @@ public class Interpreter : ResumableMachine {
         val store = instance.store
         val type = instance.functionType(functionIndex)
         requireArguments(instance, type, arguments, functionIndex)
-        store.beginInvocation()
+        store.beginInvocation(currentCoroutineContext()[kotlinx.coroutines.Job])
         try {
             call(
                 requestedInstance = instance,
@@ -80,7 +93,8 @@ public class Interpreter : ResumableMachine {
             store.frames.firstOrNull()?.type?.results
                 ?: store.pendingImport?.let { instance.functionType(it.functionIndex).results }
                 ?: emptyList()
-        val pending = store.beginRestoredInvocation()
+        val pending =
+            store.beginRestoredInvocation(currentCoroutineContext()[kotlinx.coroutines.Job])
         try {
             if (pending != null) {
                 val type = instance.functionType(pending.functionIndex)
@@ -135,7 +149,7 @@ public class Interpreter : ResumableMachine {
     /**
      * Benchmark-only control loop representing a build with checkpoint calls
      * compiled out. Keep this structurally parallel to [runUnmetered]: the
-     * absence of [Store.beforeUnmeteredInstruction] is the behavior under
+     * absence of [Store.beforeUnmeteredInstructionRequiresSlowCheckpoint] is the behavior under
      * measurement, not a different execution implementation.
      */
     private suspend fun runWithoutCheckpoints(store: Store) {
@@ -149,10 +163,31 @@ public class Interpreter : ResumableMachine {
                 continue
             }
 
+            runLinearHotSequenceWithoutCheckpoints(store, frame, control)
+            if (
+                store.frames.lastOrNull() !== frame ||
+                frame.controls.lastOrNull() !== control
+            ) {
+                continue
+            }
+            if (control.pc >= control.body.size) {
+                finishControl(store, frame, control)
+                continue
+            }
+
             val instruction = control.body[control.pc]
             control.pc++
             try {
-                executeInstruction(store, frame, instruction)
+                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                    FastInstructionResult.Handled -> Unit
+                    FastInstructionResult.NotHandled ->
+                        executeInstruction(store, frame, instruction)
+                    FastInstructionResult.RequiresSlowCheckpoint ->
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                }
             } catch (thrown: GuestThrown) {
                 if (!handleGuestException(store, thrown.exception)) {
                     throw UncaughtWasmException(thrown.exception)
@@ -174,13 +209,56 @@ public class Interpreter : ResumableMachine {
                 continue
             }
 
+            var checkpointCompletedForFirstInstruction = false
+            while (true) {
+                val result = runLinearHotSequenceUnmetered(
+                    store,
+                    frame,
+                    control,
+                    checkpointCompletedForFirstInstruction,
+                )
+                if (result == LinearHotLoopResult.Complete) break
+                store.checkpoint(
+                    handleFuel = false,
+                    listenerAlreadyNotified = true,
+                )
+                checkpointCompletedForFirstInstruction =
+                    result == LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+            }
+            if (
+                store.frames.lastOrNull() !== frame ||
+                frame.controls.lastOrNull() !== control
+            ) {
+                continue
+            }
+            if (control.pc >= control.body.size) {
+                finishControl(store, frame, control)
+                continue
+            }
+
             val instruction = control.body[control.pc]
-            store.beforeUnmeteredInstruction(
-                forceCheckpoint = instruction.requiresCallCheckpoint(),
-            )
+            if (
+                store.beforeUnmeteredInstructionRequiresSlowCheckpoint(
+                    forceCheckpoint = instruction.requiresCallCheckpoint(),
+                )
+            ) {
+                store.checkpoint(
+                    handleFuel = false,
+                    listenerAlreadyNotified = true,
+                )
+            }
             control.pc++
             try {
-                executeInstruction(store, frame, instruction)
+                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                    FastInstructionResult.Handled -> Unit
+                    FastInstructionResult.NotHandled ->
+                        executeInstruction(store, frame, instruction)
+                    FastInstructionResult.RequiresSlowCheckpoint ->
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                }
             } catch (thrown: GuestThrown) {
                 if (!handleGuestException(store, thrown.exception)) {
                     throw UncaughtWasmException(thrown.exception)
@@ -209,7 +287,16 @@ public class Interpreter : ResumableMachine {
             )
             control.pc++
             try {
-                executeInstruction(store, frame, instruction)
+                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                    FastInstructionResult.Handled -> Unit
+                    FastInstructionResult.NotHandled ->
+                        executeInstruction(store, frame, instruction)
+                    FastInstructionResult.RequiresSlowCheckpoint ->
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                }
             } catch (thrown: GuestThrown) {
                 if (!handleGuestException(store, thrown.exception)) {
                     throw UncaughtWasmException(thrown.exception)
@@ -218,6 +305,781 @@ public class Interpreter : ResumableMachine {
             canonicalizeTop(store)
             store.ensureValueStackLimit()
         }
+    }
+
+    /**
+     * Runs straight-line numeric/variable/memory instructions without
+     * repeatedly resolving the unchanged call and control frames.
+     */
+    private fun runLinearHotSequenceWithoutCheckpoints(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+    ) {
+        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        while (control.pc < control.body.size) {
+            val instruction = control.body[control.pc]
+            val opcode = instruction.opcode
+            if (
+                opcode !in 0x20..0x26 &&
+                opcode !in 0x28..0xC4 &&
+                opcode !in 0x02..0x04 &&
+                opcode != 0x0E &&
+                opcode != 0x0F &&
+                opcode != 0x10 &&
+                opcode != 0x0C &&
+                opcode != 0x0D &&
+                opcode != 0x1A &&
+                opcode != 0x1B &&
+                opcode != 0x1C
+            ) {
+                return
+            }
+            if (
+                opcode == 0x10 &&
+                frame.instance.isImportedFunction((instruction as Call).funcIndex)
+            ) {
+                return
+            }
+            val superInstruction = control.linearHotPlan[control.pc].toInt()
+            if (
+                superInstruction != 0 &&
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    store.config.limits.maxValueStackSlots &&
+                executePlannedSuperInstruction(
+                    store,
+                    frame,
+                    control.body,
+                    control.pc,
+                    superInstruction,
+                )
+            ) {
+                control.pc += plannedInstructionCount(superInstruction)
+                store.ensureValueStackLimit()
+                continue
+            }
+            control.pc++
+            if (
+                opcode in 0x02..0x04 ||
+                opcode in 0x0C..0x10
+            ) {
+                executeNonSuspendingHotInstruction(store, frame, instruction)
+                if (
+                    store.frames.lastOrNull() !== frame ||
+                    frame.controls.lastOrNull() !== control
+                ) {
+                    return
+                }
+            } else {
+                executeLinearHotInstruction(store, frame, instruction)
+            }
+            if (canonicalizeNaNs) canonicalizeTop(store)
+            store.ensureValueStackLimit()
+        }
+    }
+
+    /**
+     * Runs the default checkpoint-enabled hot loop without a coroutine state
+     * machine. A true result asks the outer suspend loop to service the rare
+     * pause checkpoint before this method resumes at the same instruction.
+     */
+    private fun runLinearHotSequenceUnmetered(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        checkpointCompletedForFirstInstruction: Boolean,
+    ): LinearHotLoopResult {
+        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        var checkpointCompleted = checkpointCompletedForFirstInstruction
+        while (control.pc < control.body.size) {
+            val instruction = control.body[control.pc]
+            val opcode = instruction.opcode
+            if (
+                opcode !in 0x20..0x26 &&
+                opcode !in 0x28..0xC4 &&
+                opcode !in 0x02..0x04 &&
+                opcode != 0x0E &&
+                opcode != 0x0F &&
+                opcode != 0x10 &&
+                opcode != 0x0C &&
+                opcode != 0x0D &&
+                opcode != 0x1A &&
+                opcode != 0x1B &&
+                opcode != 0x1C
+            ) {
+                return LinearHotLoopResult.Complete
+            }
+            if (
+                opcode == 0x10 &&
+                frame.instance.isImportedFunction((instruction as Call).funcIndex)
+            ) {
+                return LinearHotLoopResult.Complete
+            }
+            val superInstruction = control.linearHotPlan[control.pc].toInt()
+            val plannedInstructionCount = plannedInstructionCount(superInstruction)
+            if (
+                !checkpointCompleted &&
+                superInstruction != 0 &&
+                store.instructionsUntilCheckpoint > plannedInstructionCount &&
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    store.config.limits.maxValueStackSlots &&
+                executePlannedSuperInstruction(
+                    store,
+                    frame,
+                    control.body,
+                    control.pc,
+                    superInstruction,
+                )
+            ) {
+                store.instructionsUntilCheckpoint -= plannedInstructionCount
+                control.pc += plannedInstructionCount
+                store.ensureValueStackLimit()
+                continue
+            }
+            if (checkpointCompleted) {
+                checkpointCompleted = false
+            } else {
+                store.instructionsUntilCheckpoint--
+                if (
+                    (opcode == 0x10 || store.instructionsUntilCheckpoint <= 0) &&
+                    checkpointRequiresSlowCheckpoint(store)
+                ) {
+                    return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+                }
+            }
+            control.pc++
+            if (
+                opcode in 0x02..0x04 ||
+                opcode in 0x0C..0x10
+            ) {
+                val result = executeNonSuspendingHotInstruction(store, frame, instruction)
+                if (result == FastInstructionResult.RequiresSlowCheckpoint) {
+                    return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
+                }
+                if (
+                    store.frames.lastOrNull() !== frame ||
+                    frame.controls.lastOrNull() !== control
+                ) {
+                    return LinearHotLoopResult.Complete
+                }
+            } else {
+                executeLinearHotInstruction(store, frame, instruction)
+            }
+            if (canonicalizeNaNs) canonicalizeTop(store)
+            store.ensureValueStackLimit()
+        }
+        return LinearHotLoopResult.Complete
+    }
+
+    /**
+     * Executes the most common validated i32 producer/producer/operator
+     * sequence as one dispatch. Callers guarantee that no checkpoint boundary
+     * can fall inside these three logical instructions.
+     */
+    private fun executePlannedSuperInstruction(
+        store: Store,
+        frame: GuestCallFrame,
+        body: List<Instr>,
+        pc: Int,
+        plan: Int,
+    ): Boolean {
+        val stack = store.valueStack
+        val locals = store.localStack
+        if (plan > LINEAR_PLAN_I32_EXPRESSION_OFFSET) {
+            val count = plan - LINEAR_PLAN_I32_EXPRESSION_OFFSET
+            val scratch = store.i32ExpressionScratch
+            var depth = 0
+            for (index in pc until pc + count) {
+                when (val instruction = body[index]) {
+                    is I32Const -> scratch[depth++] = instruction.value
+                    is FcIndex -> when (instruction.opcode) {
+                        0x20 -> {
+                            scratch[depth++] =
+                                locals.getI32(frame.localsBase + instruction.index)
+                        }
+                        0x21 -> {
+                            locals.setI32(
+                                frame.localsBase + instruction.index,
+                                scratch[--depth],
+                            )
+                        }
+                        else -> error(
+                            "opcode 0x${instruction.opcode.toString(16)} " +
+                                "is not valid in a planned i32 expression",
+                        )
+                    }
+                    is Simple -> {
+                        val right = scratch[--depth]
+                        val leftIndex = depth - 1
+                        scratch[leftIndex] =
+                            executeI32Binary(instruction.opcode, scratch[leftIndex], right)
+                    }
+                    else -> error(
+                        "opcode 0x${instruction.opcode.toString(16)} " +
+                            "is not valid in a planned i32 expression",
+                    )
+                }
+            }
+            check(depth == 0) { "planned i32 expression left $depth temporary values" }
+            return true
+        }
+        if (plan == LINEAR_PLAN_STACK_BINARY_SET.toInt()) {
+            val operation = body[pc] as Simple
+            val right = stack.removeLastI32()
+            val left = stack.removeLastI32()
+            val target = body[pc + 1] as FcIndex
+            locals.setI32(
+                frame.localsBase + target.index,
+                executeI32Binary(operation.opcode, left, right),
+            )
+            return true
+        }
+        if (
+            plan == LINEAR_PLAN_CONST_BINARY.toInt() ||
+            plan == LINEAR_PLAN_CONST_BINARY_SET.toInt()
+        ) {
+            val right = (body[pc] as I32Const).value
+            val operation = body[pc + 1] as Simple
+            val result =
+                executeI32Binary(operation.opcode, stack.removeLastI32(), right)
+            if (plan == LINEAR_PLAN_CONST_BINARY_SET.toInt()) {
+                val target = body[pc + 2] as FcIndex
+                locals.setI32(frame.localsBase + target.index, result)
+            } else {
+                stack.addLastI32(result)
+            }
+            return true
+        }
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        if (
+            plan == LINEAR_PLAN_LOCAL_BINARY.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()
+        ) {
+            val operation = second as Simple
+            val result = executeI32Binary(
+                operation.opcode,
+                stack.removeLastI32(),
+                locals.getI32(frame.localsBase + first.index),
+            )
+            if (plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()) {
+                val target = body[pc + 2] as FcIndex
+                locals.setI32(frame.localsBase + target.index, result)
+            } else {
+                stack.addLastI32(result)
+            }
+            return true
+        }
+        if (
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD_SET.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD_TEE.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt() ||
+            plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt()
+        ) {
+            val firstLoad = second as Load
+            val firstMemory = frame.instance.memories[firstLoad.memoryIndex]
+            if (firstMemory.indexType != IndexType.I32) return false
+            val nested =
+                plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD.toInt() ||
+                    plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt() ||
+                    plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt()
+            val secondLoad = if (nested) body[pc + 2] as Load else null
+            val secondMemory = secondLoad?.let {
+                frame.instance.memories[it.memoryIndex]
+            }
+            if (secondMemory != null && secondMemory.indexType != IndexType.I32) {
+                return false
+            }
+            var result = executePlannedI32Load(
+                firstMemory,
+                firstLoad,
+                locals.getI32(frame.localsBase + first.index),
+            )
+            if (secondLoad != null) {
+                result = executePlannedI32Load(secondMemory!!, secondLoad, result)
+            }
+            when (plan) {
+                LINEAR_PLAN_LOCAL_I32_LOAD_SET.toInt() -> {
+                    val target = body[pc + 2] as FcIndex
+                    locals.setI32(frame.localsBase + target.index, result)
+                }
+                LINEAR_PLAN_LOCAL_I32_LOAD_TEE.toInt() -> {
+                    val target = body[pc + 2] as FcIndex
+                    locals.setI32(frame.localsBase + target.index, result)
+                    stack.addLastI32(result)
+                }
+                LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt() -> {
+                    val target = body[pc + 3] as FcIndex
+                    locals.setI32(frame.localsBase + target.index, result)
+                }
+                LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt() -> {
+                    val target = body[pc + 3] as FcIndex
+                    locals.setI32(frame.localsBase + target.index, result)
+                    stack.addLastI32(result)
+                }
+                else -> stack.addLastI32(result)
+            }
+            return true
+        }
+        val operation = body[pc + 2] as Simple
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val innerResult = executeI32Binary(operation.opcode, left, right)
+        var result = innerResult
+        if (
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY.toInt() ||
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET.toInt() ||
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY.toInt() ||
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt()
+        ) {
+            val outerLeft = stack.removeLastI32()
+            val outerOperation = body[pc + 3] as Simple
+            result = executeI32Binary(outerOperation.opcode, outerLeft, result)
+        }
+        if (
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY.toInt() ||
+            plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt()
+        ) {
+            val outerLeft = stack.removeLastI32()
+            val outerOperation = body[pc + 4] as Simple
+            result = executeI32Binary(outerOperation.opcode, outerLeft, result)
+        }
+        when (plan) {
+            LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt() -> {
+                val target = body[pc + 3] as FcIndex
+                locals.setI32(frame.localsBase + target.index, result)
+            }
+            LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET.toInt() -> {
+                val target = body[pc + 4] as FcIndex
+                locals.setI32(frame.localsBase + target.index, result)
+            }
+            LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt() -> {
+                val target = body[pc + 5] as FcIndex
+                locals.setI32(frame.localsBase + target.index, result)
+            }
+            else -> stack.addLastI32(result)
+        }
+        return true
+    }
+
+    private fun plannedInstructionCount(plan: Int): Int = when (plan) {
+        LINEAR_PLAN_STACK_BINARY_SET.toInt(),
+        LINEAR_PLAN_CONST_BINARY.toInt(),
+        LINEAR_PLAN_LOCAL_BINARY.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD.toInt(),
+        -> 2
+        LINEAR_PLAN_LOCAL_BINARY_SET.toInt(),
+        LINEAR_PLAN_CONST_BINARY_SET.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD_SET.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD_TEE.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD_LOAD.toInt(),
+        -> 3
+        LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt(),
+        LINEAR_PLAN_PRODUCERS_BINARY_BINARY.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt(),
+        LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt(),
+        -> 4
+        LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET.toInt(),
+        LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY.toInt(),
+        -> 5
+        LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt() -> 6
+        LINEAR_PLAN_PRODUCERS_BINARY.toInt() -> 3
+        else ->
+            if (plan > LINEAR_PLAN_I32_EXPRESSION_OFFSET) {
+                plan - LINEAR_PLAN_I32_EXPRESSION_OFFSET
+            } else {
+                0
+            }
+    }
+
+    private fun plannedValueStackDepth(plan: Int): Int =
+        if (plan > LINEAR_PLAN_I32_EXPRESSION_OFFSET) {
+            MAX_LINEAR_I32_EXPRESSION_DEPTH
+        } else {
+            2
+        }
+
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun checkpointRequiresSlowCheckpoint(store: Store): Boolean {
+        if (store.storeCancellationPending) store.job.ensureActive()
+        if (store.invocationCancellationPending) {
+            store.invocationJob?.ensureActive()
+        }
+        store.config.listener?.let { listener ->
+            val frame = store.frames.lastOrNull()
+            listener.onCheckpoint(
+                store,
+                frame?.functionIndex,
+                frame?.currentInstructionIndex,
+            )
+        }
+        if (store.controller.pausePending) return true
+        store.instructionsUntilCheckpoint = store.config.checkpointInterval
+        return false
+    }
+
+    private fun executePlannedI32Load(
+        memory: MemoryInstance,
+        instruction: Load,
+        rawAddress: Int,
+    ): Int {
+        val base = rawAddress.toUInt().toULong()
+        val address = base + instruction.offset
+        if (address < base || address > Long.MAX_VALUE.toULong()) {
+            throw Trap.oobMemory(Long.MAX_VALUE, 1)
+        }
+        val signedAddress = address.toLong()
+        return when (instruction.opcode) {
+            0x28 -> {
+                memory.checkRange(signedAddress, 4)
+                loadI32(memory, signedAddress)
+            }
+            0x2C -> {
+                memory.checkRange(signedAddress, 1)
+                memory.data()[signedAddress.toInt()].toInt()
+            }
+            0x2D -> {
+                memory.checkRange(signedAddress, 1)
+                memory.data()[signedAddress.toInt()].toInt() and 0xFF
+            }
+            0x2E -> {
+                memory.checkRange(signedAddress, 2)
+                loadI16Signed(memory, signedAddress)
+            }
+            0x2F -> {
+                memory.checkRange(signedAddress, 2)
+                loadI16Unsigned(memory, signedAddress)
+            }
+            else -> error(
+                "opcode 0x${instruction.opcode.toString(16)} is not a planned i32 load",
+            )
+        }
+    }
+
+    private fun executeI32Binary(opcode: Int, left: Int, right: Int): Int = when (opcode) {
+        0x46 -> if (left == right) 1 else 0
+        0x47 -> if (left != right) 1 else 0
+        0x48 -> if (left < right) 1 else 0
+        0x49 -> if (left.toUInt() < right.toUInt()) 1 else 0
+        0x4A -> if (left > right) 1 else 0
+        0x4B -> if (left.toUInt() > right.toUInt()) 1 else 0
+        0x4C -> if (left <= right) 1 else 0
+        0x4D -> if (left.toUInt() <= right.toUInt()) 1 else 0
+        0x4E -> if (left >= right) 1 else 0
+        0x4F -> if (left.toUInt() >= right.toUInt()) 1 else 0
+        0x6A -> left + right
+        0x6B -> left - right
+        0x6C -> left * right
+        0x6D -> idiv(left, right)
+        0x6E -> udiv(left, right)
+        0x6F -> irem(left, right)
+        0x70 -> urem(left, right)
+        0x71 -> left and right
+        0x72 -> left or right
+        0x73 -> left xor right
+        0x74 -> ishl(left, right)
+        0x75 -> isr(left, right)
+        0x76 -> ushr(left, right)
+        0x77 -> rotl(left, right)
+        0x78 -> rotr(left, right)
+        else -> error("opcode 0x${opcode.toString(16)} is not an i32 binary operation")
+    }
+
+    /**
+     * Kept inline so the dominant scalar opcodes stay inside the straight-line
+     * loop instead of crossing the large general-dispatch method twice.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun executeLinearHotInstruction(
+        store: Store,
+        frame: GuestCallFrame,
+        instruction: Instr,
+    ) {
+        val stack = store.valueStack
+        when (instruction.opcode) {
+            0x20 -> store.localStack.copyTo(
+                frame.localsBase + (instruction as FcIndex).index,
+                stack,
+            )
+            0x21 -> stack.moveLastTo(
+                store.localStack,
+                frame.localsBase + (instruction as FcIndex).index,
+            )
+            0x22 -> stack.copyTo(
+                stack.lastIndex,
+                store.localStack,
+                frame.localsBase + (instruction as FcIndex).index,
+            )
+            0x41 -> stack.addLastI32((instruction as I32Const).value)
+            0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)
+            0x46 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left == right) 1 else 0)
+            }
+            0x47 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left != right) 1 else 0)
+            }
+            0x48 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left < right) 1 else 0)
+            }
+            0x49 -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left < right) 1 else 0)
+            }
+            0x4A -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left > right) 1 else 0)
+            }
+            0x4B -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left > right) 1 else 0)
+            }
+            0x4C -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left <= right) 1 else 0)
+            }
+            0x4D -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left <= right) 1 else 0)
+            }
+            0x4E -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left >= right) 1 else 0)
+            }
+            0x4F -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left >= right) 1 else 0)
+            }
+            0x67 -> stack.addLastI32(clz32(stack.removeLastI32()))
+            0x68 -> stack.addLastI32(ctz32(stack.removeLastI32()))
+            0x69 -> stack.addLastI32(popcnt32(stack.removeLastI32()))
+            0x6A -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left + right)
+            }
+            0x6B -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left - right)
+            }
+            0x6C -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left * right)
+            }
+            0x6D -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(idiv(left, right))
+            }
+            0x6E -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(udiv(left, right))
+            }
+            0x6F -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(irem(left, right))
+            }
+            0x70 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(urem(left, right))
+            }
+            0x71 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left and right)
+            }
+            0x72 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left or right)
+            }
+            0x73 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left xor right)
+            }
+            0x74 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(ishl(left, right))
+            }
+            0x75 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(isr(left, right))
+            }
+            0x76 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(ushr(left, right))
+            }
+            0x77 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(rotl(left, right))
+            }
+            0x78 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(rotr(left, right))
+            }
+            else -> executeNonSuspendingHotInstruction(store, frame, instruction)
+        }
+    }
+
+    /**
+     * Executes the allocation-sensitive instruction families that cannot
+     * suspend without entering a suspend state machine for every guest
+     * opcode. Host calls, GC branch instructions, and reference branches
+     * deliberately fall through to [executeInstruction].
+     */
+    private fun executeNonSuspendingHotInstruction(
+        store: Store,
+        frame: GuestCallFrame,
+        instruction: Instr,
+    ): FastInstructionResult {
+        val instance = frame.instance
+        val stack = store.valueStack
+        when (instruction.opcode) {
+            in 0x45..0xC4 -> {
+                if (instruction !is Simple) return FastInstructionResult.NotHandled
+                execSimple(instruction.opcode, stack)
+            }
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26 -> {
+                if (instruction !is FcIndex) return FastInstructionResult.NotHandled
+                execFcIndex(instance, frame, instruction, stack)
+            }
+            0x41 -> stack.addLastI32((instruction as I32Const).value)
+            0x42 -> stack.addLastI64((instruction as I64Const).value)
+            0x43 -> stack.addLastF32((instruction as F32Const).value)
+            0x44 -> stack.addLastF64((instruction as F64Const).value)
+            in 0x28..0x35 -> execLoad(instance, instruction as Load, stack)
+            in 0x36..0x3E -> execStore(instance, instruction as Instr.Store, stack)
+            0x02 -> pushControl(
+                frame,
+                stack,
+                ControlKind.Block,
+                (instruction as Block).blockType,
+                instruction.body,
+            )
+            0x03 -> pushControl(
+                frame,
+                stack,
+                ControlKind.Loop,
+                (instruction as Loop).blockType,
+                instruction.body,
+            )
+            0x04 -> {
+                instruction as If
+                val condition = stack.removeLastI32()
+                pushControl(
+                    frame,
+                    stack,
+                    ControlKind.If,
+                    instruction.blockType,
+                    if (condition != 0) instruction.thenBody else instruction.elseBody,
+                )
+            }
+            0x0F -> finishFunction(store, frame)
+            0x1A -> repeat((instruction as Drop).n) { stack.removeLast() }
+            0x1B -> select(stack)
+            0x1C -> select(stack)
+            0x0C -> {
+                return if (branch(store, frame, (instruction as Br).depth)) {
+                    FastInstructionResult.RequiresSlowCheckpoint
+                } else {
+                    FastInstructionResult.Handled
+                }
+            }
+            0x0D -> {
+                if (stack.removeLastI32() != 0) {
+                    return if (branch(store, frame, (instruction as BrIf).depth)) {
+                        FastInstructionResult.RequiresSlowCheckpoint
+                    } else {
+                        FastInstructionResult.Handled
+                    }
+                }
+            }
+            0x0E -> {
+                instruction as BrTable
+                val selector = stack.removeLastI32()
+                val depth =
+                    if (selector < 0 || selector >= instruction.rawTargets.size) {
+                        instruction.defaultTarget
+                    } else {
+                        instruction.rawTargets[selector]
+                    }
+                return if (branch(store, frame, depth)) {
+                    FastInstructionResult.RequiresSlowCheckpoint
+                } else {
+                    FastInstructionResult.Handled
+                }
+            }
+            0x10 -> {
+                instruction as Call
+                val target =
+                    if (instance.isImportedFunction(instruction.funcIndex)) {
+                        resolveGuestTarget(
+                            requestedInstance = instance,
+                            requestedFunctionIndex = instruction.funcIndex,
+                        ) ?: return FastInstructionResult.NotHandled
+                    } else {
+                        null
+                    }
+                val targetInstance = target?.instance ?: instance
+                val targetIndex = target?.functionIndex ?: instruction.funcIndex
+                val type = targetInstance.functionType(targetIndex)
+                pushGuestCallFromStack(
+                    instance = targetInstance,
+                    functionIndex = targetIndex,
+                    parameterCount = type.params.size,
+                )
+            }
+            0x3F -> when (instruction) {
+                MemorySize -> execMemorySize(instance, 0, stack)
+                is MemorySizeAt ->
+                    execMemorySize(instance, instruction.memoryIndex, stack)
+                else -> return FastInstructionResult.NotHandled
+            }
+            0x40 -> when (instruction) {
+                MemoryGrow -> execMemoryGrow(instance, 0, stack)
+                is MemoryGrowAt ->
+                    execMemoryGrow(instance, instruction.memoryIndex, stack)
+                else -> return FastInstructionResult.NotHandled
+            }
+            else -> when (instruction) {
+                is FcIndex -> execFcIndex(instance, frame, instruction, stack)
+                is MemoryCopy -> execMemoryCopy(instance, instruction, stack)
+                is MemoryFill -> execMemoryFill(instance, instruction, stack)
+                is MemoryInit -> execMemoryInit(instance, instruction, stack)
+                DataDrop -> Unit
+                else -> return FastInstructionResult.NotHandled
+            }
+        }
+        return FastInstructionResult.Handled
     }
 
     private suspend fun executeInstruction(
@@ -263,9 +1125,24 @@ public class Interpreter : ResumableMachine {
             Else, End, Nop -> Unit
             Unreachable -> throw Trap.unreachable()
             Return -> finishFunction(store, frame)
-            is Br -> branch(store, frame, instruction.depth)
+            is Br -> {
+                if (branch(store, frame, instruction.depth)) {
+                    store.checkpoint(
+                        handleFuel = false,
+                        listenerAlreadyNotified = true,
+                    )
+                }
+            }
             is BrIf -> {
-                if (stack.removeLastI32() != 0) branch(store, frame, instruction.depth)
+                if (
+                    stack.removeLastI32() != 0 &&
+                    branch(store, frame, instruction.depth)
+                ) {
+                    store.checkpoint(
+                        handleFuel = false,
+                        listenerAlreadyNotified = true,
+                    )
+                }
             }
             is BrTable -> {
                 val selector = stack.removeLastI32()
@@ -275,7 +1152,12 @@ public class Interpreter : ResumableMachine {
                     } else {
                         instruction.rawTargets[selector]
                     }
-                branch(store, frame, depth)
+                if (branch(store, frame, depth)) {
+                    store.checkpoint(
+                        handleFuel = false,
+                        listenerAlreadyNotified = true,
+                    )
+                }
             }
             is Call -> {
                 val type = instance.functionType(instruction.funcIndex)
@@ -344,14 +1226,24 @@ public class Interpreter : ResumableMachine {
             is BrOnNull -> {
                 if (stack.last().isNullRef()) {
                     stack.removeLast()
-                    branch(store, frame, instruction.depth)
+                    if (branch(store, frame, instruction.depth)) {
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                    }
                 }
             }
             is BrOnNonNull -> {
                 if (stack.last().isNullRef()) {
                     stack.removeLast()
                 } else {
-                    branch(store, frame, instruction.depth)
+                    if (branch(store, frame, instruction.depth)) {
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                    }
                 }
             }
             is Throw -> {
@@ -426,16 +1318,13 @@ public class Interpreter : ResumableMachine {
         val store = instance.store
         val type = instance.functionType(functionIndex)
         requireArguments(instance, type, arguments, functionIndex)
-        val inheritedBase =
-            if (tail) {
-                val replaced = store.frames.removeLast()
-                truncate(store.valueStack, replaced.stackBase)
-                replaced.stackBase
-            } else {
-                store.valueStack.size
-            }
 
         if (instance.isImportedFunction(functionIndex)) {
+            if (tail) {
+                val replaced = store.removeLastGuestFrame()
+                truncate(store.valueStack, replaced.stackBase)
+                store.releaseGuestFrame(replaced)
+            }
             store.enterHostImport(functionIndex, arguments)
             if (entryCheckpoint && store.config.checkpointMode == CheckpointMode.Enabled) {
                 store.checkpoint(handleFuel = false)
@@ -462,6 +1351,61 @@ public class Interpreter : ResumableMachine {
             return
         }
 
+        pushGuestCall(instance, functionIndex, arguments, tail)
+        if (entryCheckpoint && store.config.checkpointMode == CheckpointMode.Enabled) {
+            store.checkpoint(handleFuel = false)
+        }
+    }
+
+    /**
+     * Resolves a local or re-exported guest function without touching runtime
+     * stacks. A null result means the call ultimately targets a host import
+     * and must use the suspending path.
+     */
+    private fun resolveGuestTarget(
+        requestedInstance: Instance,
+        requestedFunctionIndex: Int,
+    ): GuestFunctionAddress? {
+        var instance = requestedInstance
+        var functionIndex = requestedFunctionIndex
+        if (!instance.isImportedFunction(functionIndex)) {
+            return GuestFunctionAddress(instance, functionIndex)
+        }
+        val visitedAliases = mutableSetOf<GuestFunctionAddress>()
+        while (instance.isImportedFunction(functionIndex)) {
+            val guest = instance.importedFunction(functionIndex).guestAddress ?: return null
+            if (guest.instance.store !== requestedInstance.store) {
+                throw LinkException(
+                    "cross-instance guest call requires both instances to share a Store",
+                )
+            }
+            if (!visitedAliases.add(guest)) {
+                throw LinkException("cyclic guest function import alias")
+            }
+            instance = guest.instance
+            functionIndex = guest.functionIndex
+        }
+        return GuestFunctionAddress(instance, functionIndex)
+    }
+
+    private fun pushGuestCall(
+        instance: Instance,
+        functionIndex: Int,
+        arguments: List<Value>,
+        tail: Boolean,
+    ) {
+        val store = instance.store
+        val type = instance.functionType(functionIndex)
+        val inheritedBase =
+            if (tail) {
+                val replaced = store.removeLastGuestFrame()
+                truncate(store.valueStack, replaced.stackBase)
+                replaced.stackBase.also {
+                    store.releaseGuestFrame(replaced)
+                }
+            } else {
+                store.valueStack.size
+            }
         if (store.frames.size >= store.config.limits.maxFrames) {
             throw ExecutionTrap(
                 TrapKind.CALL_STACK_EXHAUSTED,
@@ -469,10 +1413,70 @@ public class Interpreter : ResumableMachine {
             )
         }
         val function = instance.module.functions[functionIndex - instance.imports.functions.size]
-        val locals = ArrayList<Value>(arguments.size + function.locals.size)
-        locals.addAll(arguments)
-        function.locals.forEach { locals.add(zeroOf(it, instance.module)) }
-        val root = GuestControlFrame(
+        val localsBase = store.localStack.size
+        arguments.forEach(store.localStack::addLast)
+        function.locals.forEach {
+            store.localStack.addLast(zeroOf(it, instance.module))
+        }
+        pushGuestCallFrame(
+            instance = instance,
+            functionIndex = functionIndex,
+            type = type,
+            function = function,
+            localsBase = localsBase,
+            localCount = arguments.size + function.locals.size,
+            inheritedBase = inheritedBase,
+            arguments = arguments,
+        )
+    }
+
+    private fun pushGuestCallFromStack(
+        instance: Instance,
+        functionIndex: Int,
+        parameterCount: Int,
+    ) {
+        val store = instance.store
+        if (store.frames.size >= store.config.limits.maxFrames) {
+            throw ExecutionTrap(
+                TrapKind.CALL_STACK_EXHAUSTED,
+                "frame count ${store.frames.size + 1} exceeds ${store.config.limits.maxFrames}",
+            )
+        }
+        val type = instance.functionType(functionIndex)
+        val function = instance.module.functions[functionIndex - instance.imports.functions.size]
+        val inheritedBase = store.valueStack.size - parameterCount
+        val localsBase = store.localStack.size
+        store.valueStack.moveTopTo(store.localStack, parameterCount)
+        function.locals.forEach {
+            store.localStack.addLast(zeroOf(it, instance.module))
+        }
+        val listener = store.config.listener
+        pushGuestCallFrame(
+            instance = instance,
+            functionIndex = functionIndex,
+            type = type,
+            function = function,
+            localsBase = localsBase,
+            localCount = parameterCount + function.locals.size,
+            inheritedBase = inheritedBase,
+            arguments = listener?.let {
+                store.localStack.toList(localsBase, parameterCount)
+            },
+        )
+    }
+
+    private fun pushGuestCallFrame(
+        instance: Instance,
+        functionIndex: Int,
+        type: FuncType,
+        function: Function,
+        localsBase: Int,
+        localCount: Int,
+        inheritedBase: Int,
+        arguments: List<Value>?,
+    ) {
+        val store = instance.store
+        val root = store.acquireGuestControl(
             kind = ControlKind.Function,
             body = function.body,
             pc = 0,
@@ -481,73 +1485,82 @@ public class Interpreter : ResumableMachine {
             resultCount = type.results.size,
             labelArity = type.results.size,
         )
-        val frame = GuestCallFrame(
+        val frame = store.acquireGuestFrame(
             instance = instance,
             functionIndex = functionIndex,
             functionName = instance.module.nameSection?.functionNames?.get(functionIndex),
             type = type,
-            locals = locals,
+            localsBase = localsBase,
+            localCount = localCount,
             stackBase = inheritedBase,
-            controls = ArrayDeque<GuestControlFrame>().apply { addLast(root) },
+            root = root,
         )
         store.frames.addLast(frame)
-        if (entryCheckpoint && store.config.checkpointMode == CheckpointMode.Enabled) {
-            store.checkpoint(handleFuel = false)
+        if (arguments != null) {
+            store.config.listener?.onCallStarted(instance, functionIndex, arguments)
         }
-        store.config.listener?.onCallStarted(instance, functionIndex, arguments)
     }
 
     private fun pushControl(
         frame: GuestCallFrame,
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
         kind: ControlKind,
         blockType: BlockType,
         body: List<Instr>,
         exceptionHandler: GuestExceptionHandler? = null,
     ) {
-        val signature = blockSignature(frame.instance.module, blockType)
-        if (stack.size < signature.params.size) {
+        val signature = when (blockType) {
+            BlockType.Empty -> null
+            is BlockType.Single -> null
+            is BlockType.TypeIndex ->
+                frame.instance.module.functionTypeByTypeIndex(blockType.index)
+        }
+        val parameterCount = signature?.params?.size ?: 0
+        val resultCount = signature?.results?.size
+            ?: if (blockType is BlockType.Single) 1 else 0
+        if (stack.size < parameterCount) {
             throw ExecutionTrap(TrapKind.UNREACHABLE_PARENT, "value stack underflow entering $kind")
         }
         frame.controls.addLast(
-            GuestControlFrame(
+            frame.instance.store.acquireGuestControl(
                 kind = kind,
                 body = body,
                 pc = 0,
-                stackBase = stack.size - signature.params.size,
-                parameterCount = signature.params.size,
-                resultCount = signature.results.size,
-                labelArity = if (kind == ControlKind.Loop) signature.params.size else signature.results.size,
+                stackBase = stack.size - parameterCount,
+                parameterCount = parameterCount,
+                resultCount = resultCount,
+                labelArity = if (kind == ControlKind.Loop) parameterCount else resultCount,
                 exceptionHandler = exceptionHandler,
             ),
         )
     }
 
-    private suspend fun branch(store: Store, frame: GuestCallFrame, depth: Int) {
+    private fun branch(store: Store, frame: GuestCallFrame, depth: Int): Boolean {
         if (depth < 0 || depth >= frame.controls.size) {
             throw ExecutionTrap(TrapKind.UNREACHABLE_PARENT, "invalid branch depth $depth")
         }
         val targetIndex = frame.controls.lastIndex - depth
         val target = frame.controls[targetIndex]
-        val values = takeTop(store.valueStack, target.labelArity)
-        while (frame.controls.lastIndex > targetIndex) frame.controls.removeLast()
-        truncate(store.valueStack, target.stackBase)
-        values.forEach(store.valueStack::addLast)
+        while (frame.controls.lastIndex > targetIndex) {
+            store.releaseLastGuestControl(frame)
+        }
+        store.valueStack.retainTopAt(target.stackBase, target.labelArity)
 
         when (target.kind) {
             ControlKind.Loop -> {
                 target.pc = 0
                 if (store.config.checkpointMode == CheckpointMode.Enabled) {
-                    store.checkpoint(handleFuel = false)
+                    return checkpointRequiresSlowCheckpoint(store)
                 }
             }
-            ControlKind.Function -> finishFunction(store, frame, values)
+            ControlKind.Function -> finishFunction(store, frame)
             ControlKind.Block,
             ControlKind.If,
             ControlKind.TryTable,
             ControlKind.LegacyTry,
-            -> frame.controls.removeLast()
+            -> store.releaseLastGuestControl(frame)
         }
+        return false
     }
 
     private suspend fun handleGuestException(
@@ -585,13 +1598,23 @@ public class Interpreter : ResumableMachine {
                                     // context outside try_table. The handler
                                     // control is still installed here, so skip
                                     // it when resolving the encoded depth.
-                                    branch(store, frame, clause.depth + 1)
+                                    if (branch(store, frame, clause.depth + 1)) {
+                                        store.checkpoint(
+                                            handleFuel = false,
+                                            listenerAlreadyNotified = true,
+                                        )
+                                    }
                                 }
                                 is CatchClause.All -> {
                                     if (clause.withReference) {
                                         store.valueStack.addLast(Value.Ref.Exn(exception))
                                     }
-                                    branch(store, frame, clause.depth + 1)
+                                    if (branch(store, frame, clause.depth + 1)) {
+                                        store.checkpoint(
+                                            handleFuel = false,
+                                            listenerAlreadyNotified = true,
+                                        )
+                                    }
                                 }
                             }
                             return true
@@ -609,6 +1632,7 @@ public class Interpreter : ResumableMachine {
                                 exception.arguments.forEach(store.valueStack::addLast)
                             }
                             control.body = body
+                            control.linearHotPlan = store.linearHotPlan(body)
                             control.pc = 0
                             control.exceptionHandler = null
                             control.caughtException = exception
@@ -632,9 +1656,14 @@ public class Interpreter : ResumableMachine {
         frameIndex: Int,
         controlIndex: Int,
     ) {
-        while (store.frames.lastIndex > frameIndex) store.frames.removeLast()
+        while (store.frames.lastIndex > frameIndex) {
+            val removed = store.removeLastGuestFrame()
+            store.releaseGuestFrame(removed)
+        }
         val frame = store.frames.last()
-        while (frame.controls.lastIndex > controlIndex) frame.controls.removeLast()
+        while (frame.controls.lastIndex > controlIndex) {
+            store.releaseLastGuestControl(frame)
+        }
     }
 
     private fun sameReference(left: Value.Ref, right: Value.Ref): Boolean = when {
@@ -652,32 +1681,39 @@ public class Interpreter : ResumableMachine {
     }
 
     private fun finishControl(store: Store, frame: GuestCallFrame, control: GuestControlFrame) {
-        val values = takeTop(store.valueStack, control.resultCount)
-        truncate(store.valueStack, control.stackBase)
-        values.forEach(store.valueStack::addLast)
-        frame.controls.removeLast()
         if (control.kind == ControlKind.Function) {
-            finishFunction(store, frame, valuesAlreadyOnStack = values)
+            finishFunction(store, frame)
+        } else {
+            store.releaseLastGuestControl(frame)
+            store.valueStack.retainTopAt(control.stackBase, control.resultCount)
         }
     }
 
     private fun finishFunction(
         store: Store,
         frame: GuestCallFrame,
-        valuesAlreadyOnStack: List<Value>? = null,
     ) {
-        val results = valuesAlreadyOnStack ?: takeTop(store.valueStack, frame.type.results.size)
-        truncate(store.valueStack, frame.stackBase)
-        results.forEach(store.valueStack::addLast)
-        if (store.frames.lastOrNull() === frame) store.frames.removeLast()
-        store.config.listener?.onCallFinished(frame.instance, frame.functionIndex, results)
+        val resultCount = frame.type.results.size
+        store.valueStack.retainTopAt(frame.stackBase, resultCount)
+        val removed = store.frames.lastOrNull() === frame
+        if (removed) {
+            store.removeLastGuestFrame()
+        }
+        store.config.listener?.let { listener ->
+            listener.onCallFinished(
+                frame.instance,
+                frame.functionIndex,
+                store.valueStack.toList(frame.stackBase, resultCount),
+            )
+        }
+        if (removed) store.releaseGuestFrame(frame)
     }
 
     private fun resolveIndirect(
         instance: Instance,
         tableIndex: Int,
         typeIndex: Int,
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
     ): Value.Ref.Func {
         val table = instance.tables[tableIndex]
         val rawIndex = popIndex(stack, table.indexType)
@@ -715,28 +1751,23 @@ public class Interpreter : ResumableMachine {
         }
     }
 
-    private fun blockSignature(module: Module, blockType: BlockType): FuncType = when (blockType) {
-        BlockType.Empty -> FuncType(emptyList(), emptyList())
-        is BlockType.Single -> FuncType(emptyList(), listOf(blockType.type))
-        is BlockType.TypeIndex -> module.functionTypeByTypeIndex(blockType.index)
-    }
-
-    private fun popArguments(stack: ArrayDeque<Value>, count: Int): List<Value> =
+    private fun popArguments(stack: RuntimeValueStack, count: Int): List<Value> =
         takeTop(stack, count)
 
-    private fun takeTop(stack: ArrayDeque<Value>, count: Int): List<Value> {
+    private fun takeTop(stack: RuntimeValueStack, count: Int): List<Value> {
         if (count < 0 || stack.size < count) {
             throw ExecutionTrap(
                 TrapKind.UNREACHABLE_PARENT,
                 "value stack underflow: need $count values, have ${stack.size}",
             )
         }
+        if (count == 0) return emptyList()
         val values = ArrayList<Value>(count)
         repeat(count) { values.add(0, stack.removeLast()) }
         return values
     }
 
-    private fun truncate(stack: ArrayDeque<Value>, size: Int) {
+    private fun truncate(stack: RuntimeValueStack, size: Int) {
         if (size < 0 || size > stack.size) {
             throw ExecutionTrap(
                 TrapKind.UNREACHABLE_PARENT,
@@ -746,7 +1777,7 @@ public class Interpreter : ResumableMachine {
         while (stack.size > size) stack.removeLast()
     }
 
-    private fun select(stack: ArrayDeque<Value>) {
+    private fun select(stack: RuntimeValueStack) {
         val condition = stack.removeLastI32()
         val second = stack.removeLast()
         val first = stack.removeLast()
@@ -1053,7 +2084,12 @@ public class Interpreter : ResumableMachine {
                     instruction.subOpcode == 24 && matches ||
                     instruction.subOpcode == 25 && !matches
                 ) {
-                    branch(store, frame, instruction.depth)
+                    if (branch(store, frame, instruction.depth)) {
+                        store.checkpoint(
+                            handleFuel = false,
+                            listenerAlreadyNotified = true,
+                        )
+                    }
                 }
             }
             26 -> {
@@ -1093,7 +2129,7 @@ public class Interpreter : ResumableMachine {
         module.types.getOrNull(index) as? ArrayType
             ?: throw ExecutionTrap(TrapKind.UNREACHABLE_PARENT, "type $index is not an array")
 
-    private fun popStruct(stack: ArrayDeque<Value>): StructObject {
+    private fun popStruct(stack: RuntimeValueStack): StructObject {
         val reference = stack.removeLast() as? Value.Ref.Gc ?: throw Trap.castFailure()
         return reference.value as? StructObject ?: if (reference.value == null) {
             throw Trap.nullReference()
@@ -1102,7 +2138,7 @@ public class Interpreter : ResumableMachine {
         }
     }
 
-    private fun popArray(stack: ArrayDeque<Value>): ArrayObject {
+    private fun popArray(stack: RuntimeValueStack): ArrayObject {
         val reference = stack.removeLast() as? Value.Ref.Gc ?: throw Trap.castFailure()
         return reference.value as? ArrayObject ?: if (reference.value == null) {
             throw Trap.nullReference()
@@ -1111,9 +2147,9 @@ public class Interpreter : ResumableMachine {
         }
     }
 
-    private fun popAllocationLength(stack: ArrayDeque<Value>): Int = popUnsignedI32(stack)
+    private fun popAllocationLength(stack: RuntimeValueStack): Int = popUnsignedI32(stack)
 
-    private fun popUnsignedI32(stack: ArrayDeque<Value>): Int {
+    private fun popUnsignedI32(stack: RuntimeValueStack): Int {
         val value = stack.removeLastI32().toUInt()
         if (value > Int.MAX_VALUE.toUInt()) throw Trap.arrayOutOfBounds(Int.MAX_VALUE, 0)
         return value.toInt()
@@ -1222,12 +2258,14 @@ public class Interpreter : ResumableMachine {
         instance: Instance,
         frame: GuestCallFrame,
         ins: FcIndex,
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
     ) {
+        val locals = instance.store.localStack
+        val localIndex = frame.localsBase + ins.index
         when (ins.opcode) {
-            0x20 -> stack.addLast(frame.locals[ins.index])                      // local.get
-            0x21 -> frame.locals[ins.index] = stack.removeLast()                // local.set
-            0x22 -> { val v = stack.last(); frame.locals[ins.index] = v }       // local.tee
+            0x20 -> locals.copyTo(localIndex, stack)                            // local.get
+            0x21 -> stack.moveLastTo(locals, localIndex)                        // local.set
+            0x22 -> stack.copyTo(stack.lastIndex, locals, localIndex)           // local.tee
             0x23 -> stack.addLast(instance.globals[ins.index].value)            // global.get
             0x24 -> instance.globals[ins.index].set(stack.removeLast())         // global.set
             0x25 -> {                                                           // table.get
@@ -1386,7 +2424,7 @@ public class Interpreter : ResumableMachine {
         instance.dataSegments[segIdx] = seg.dropped()
     }
 
-    private fun execMemoryCopy(instance: Instance, ins: MemoryCopy, stack: ArrayDeque<Value>) {
+    private fun execMemoryCopy(instance: Instance, ins: MemoryCopy, stack: RuntimeValueStack) {
         val dst = instance.memories[ins.dstIndex]
         val src = instance.memories[ins.srcIndex]
         val lengthType = minimumIndexType(dst.indexType, src.indexType)
@@ -1412,7 +2450,7 @@ public class Interpreter : ResumableMachine {
         buf.copyInto(dst.data(), d)
     }
 
-    private fun execMemoryFill(instance: Instance, ins: MemoryFill, stack: ArrayDeque<Value>) {
+    private fun execMemoryFill(instance: Instance, ins: MemoryFill, stack: RuntimeValueStack) {
         val mem = instance.memories[ins.dstIndex]
         val count = popIndex(stack, mem.indexType)
         val v = (stack.removeLast() as Value.I32).v.toByte()
@@ -1429,7 +2467,7 @@ public class Interpreter : ResumableMachine {
         for (k in d until d + n) data[k] = v
     }
 
-    private fun execMemoryInit(instance: Instance, ins: MemoryInit, stack: ArrayDeque<Value>) {
+    private fun execMemoryInit(instance: Instance, ins: MemoryInit, stack: RuntimeValueStack) {
         val count = stack.removeLastI32().toUInt().toULong()
         val source = stack.removeLastI32().toUInt().toULong()
         val seg = instance.dataSegments.getOrNull(ins.dataSegment)
@@ -1452,7 +2490,7 @@ public class Interpreter : ResumableMachine {
 
     // ---- memory load/store ----
 
-    private fun execLoad(instance: Instance, ins: Load, stack: ArrayDeque<Value>) {
+    private fun execLoad(instance: Instance, ins: Load, stack: RuntimeValueStack) {
         val mem = instance.memories[ins.memoryIndex]
         val base = effectiveAddress(stack, mem, ins.offset)
         when (ins.opcode) {
@@ -1474,7 +2512,7 @@ public class Interpreter : ResumableMachine {
         }
     }
 
-    private fun execStore(instance: Instance, ins: Instr.Store, stack: ArrayDeque<Value>) {
+    private fun execStore(instance: Instance, ins: Instr.Store, stack: RuntimeValueStack) {
         val v = stack.removeLast()
         val mem = instance.memories[ins.memoryIndex]
         val base = effectiveAddress(stack, mem, ins.offset)
@@ -1539,19 +2577,19 @@ public class Interpreter : ResumableMachine {
         b[a] = v.toByte(); b[a + 1] = (v shr 8).toByte()
     }
 
-    private fun popIndex(stack: ArrayDeque<Value>, type: IndexType): ULong = when (type) {
+    private fun popIndex(stack: RuntimeValueStack, type: IndexType): ULong = when (type) {
         IndexType.I32 -> stack.removeLastI32().toUInt().toULong()
         IndexType.I64 -> stack.removeLastI64().toULong()
     }
 
-    private fun pushIndex(stack: ArrayDeque<Value>, type: IndexType, value: ULong) {
+    private fun pushIndex(stack: RuntimeValueStack, type: IndexType, value: ULong) {
         when (type) {
             IndexType.I32 -> stack.addLast(Value.I32(value.toUInt().toInt()))
             IndexType.I64 -> stack.addLast(Value.I64(value.toLong()))
         }
     }
 
-    private fun pushIndexResult(stack: ArrayDeque<Value>, type: IndexType, result: Int) {
+    private fun pushIndexResult(stack: RuntimeValueStack, type: IndexType, result: Int) {
         when (type) {
             IndexType.I32 -> stack.addLast(Value.I32(result))
             IndexType.I64 -> stack.addLast(Value.I64(result.toLong()))
@@ -1570,7 +2608,7 @@ public class Interpreter : ResumableMachine {
     private fun execMemorySize(
         instance: Instance,
         memoryIndex: Int,
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
     ) {
         val memory = instance.memories[memoryIndex]
         when (memory.indexType) {
@@ -1582,7 +2620,7 @@ public class Interpreter : ResumableMachine {
     private fun execMemoryGrow(
         instance: Instance,
         memoryIndex: Int,
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
     ) {
         val memory = instance.memories[memoryIndex]
         when (memory.indexType) {
@@ -1598,7 +2636,7 @@ public class Interpreter : ResumableMachine {
     }
 
     private fun effectiveAddress(
-        stack: ArrayDeque<Value>,
+        stack: RuntimeValueStack,
         memory: MemoryInstance,
         offset: ULong,
     ): Long {
@@ -1615,7 +2653,7 @@ public class Interpreter : ResumableMachine {
 
     // ---- numeric / comparison / arithmetic ----
 
-    private fun execSimple(opcode: Int, stack: ArrayDeque<Value>) {
+    private fun execSimple(opcode: Int, stack: RuntimeValueStack) {
         when (opcode) {
             // i32 comparisons
             0x45 -> stack.addLast(Value.I32(if (stack.removeLastI32() == 0) 1 else 0))              // i32.eqz

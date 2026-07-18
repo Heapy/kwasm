@@ -16,7 +16,16 @@
     "chasm": {
       "repository": "https://github.com/CharlieTap/chasm.git",
       "commit": "9e2e2fa50eef63c793473894633a00e5d58bcefe",
-      "purpose": "informational and NFR-1 interpreter comparison"
+      "purpose": "informational and NFR-1 interpreter comparison",
+      "coreMarkFixture": {
+        "path": "benchmark/src/commonMain/resources/benchmark/coremark.wasm",
+        "sha256": "77da1d88a16d432a6c74d3e60d1e239003f2adc1e50b31125507bb8e175af05a",
+        "introducedByCommit": "1dae77217a3f0ea915e4c43eafc1a580469073d9",
+        "imports": [
+          "env.clock_ms"
+        ],
+        "export": "run"
+      }
     },
     "chicory": {
       "repository": "https://github.com/dylibso/chicory.git",

@@ -73,6 +73,22 @@
             "type": "number",
             "exclusiveMinimum": 0
           },
+          "kwasmScoreMsPerOp": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "kwasmBenchmark": {
+            "type": "string",
+            "minLength": 1
+          },
+          "externalBenchmark": {
+            "type": "string",
+            "minLength": 1
+          },
+          "coreMarkSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
           "upstreamCommit": {
             "type": "string",
             "pattern": "^[0-9a-f]{40}$"

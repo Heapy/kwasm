@@ -77,11 +77,22 @@ require(
         "kwasm.kotlinWasmCompatibilityVersions must contain the same number of rows"
 }
 val currentKotlinCompilerVersion = libs.versions.kotlin.get()
+val currentKotlinWasmUsesNewExceptionProposal =
+    providers.gradleProperty("kwasm.kotlinWasmUseNewExceptionProposal")
+        .map { it.toBooleanStrict() }
+        .orElse(true)
+val currentKotlinCompilerRow =
+    "$currentKotlinCompilerVersion-" +
+        if (currentKotlinWasmUsesNewExceptionProposal.get()) {
+            "new-eh"
+        } else {
+            "legacy-eh"
+        }
 val kotlinWasmCompatibilityBinaries =
     listOf(currentKotlinWasmCompatibilityBinary.get().asFile) +
         additionalKotlinWasmCompatibilityBinaries
 val kotlinWasmCompatibilityVersions =
-    listOf(currentKotlinCompilerVersion) +
+    listOf(currentKotlinCompilerRow) +
         additionalKotlinWasmCompatibilityVersions
 val requiredKotlinWasmCompatibilityVersions =
     providers.gradleProperty("kwasm.kotlinWasmCompatibilityRequiredVersions")
@@ -89,7 +100,7 @@ val requiredKotlinWasmCompatibilityVersions =
         ?.split(',')
         ?.map(String::trim)
         ?.filter(String::isNotBlank)
-        ?: listOf(currentKotlinCompilerVersion)
+        ?: listOf(currentKotlinCompilerRow)
 
 tasks.named<Test>("jvmTest") {
     dependsOn(":bindgen-api:compileTestDevelopmentExecutableKotlinWasmWasi")

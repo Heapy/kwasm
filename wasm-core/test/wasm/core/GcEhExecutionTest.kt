@@ -97,6 +97,49 @@ class GcEhExecutionTest {
     }
 
     @Test
+    fun legacyCatchReplacesTheTryBodyHotPlan(): Unit = runBlocking {
+        val module = validatedModule {
+            types += FuncType(emptyList(), emptyList())
+            types += FuncType(emptyList(), listOf(ValType.I32))
+            tags += Tag(typeIndex = 0)
+            functions += Function(
+                typeIndex = 1,
+                locals = listOf(ValType.I32),
+                body = listOf(
+                    LegacyTry(
+                        blockType = BlockType.Single(ValType.I32),
+                        body = listOf(
+                            FcIndex(0x20, 0),
+                            I32Const(1),
+                            Simple(0x6A),
+                            Drop(),
+                            Throw(0),
+                        ),
+                        catches = listOf(
+                            LegacyCatch(
+                                tagIndex = 0,
+                                body = listOf(
+                                    FcIndex(0x20, 0),
+                                    I32Const(1),
+                                    If(
+                                        blockType = BlockType.Empty,
+                                        thenBody = emptyList(),
+                                        elseBody = emptyList(),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        catchAll = null,
+                        delegateDepth = null,
+                    ),
+                ),
+            )
+        }
+
+        assertEquals(listOf(Value.I32(0)), Interpreter().invoke(Instance(module), 0))
+    }
+
+    @Test
     fun nullReferenceBranchesUseTheirSpecifiedFallthroughStack(): Unit = runBlocking {
         val module = validatedModule {
             types += FuncType(emptyList(), listOf(ValType.I32, FuncRefType))

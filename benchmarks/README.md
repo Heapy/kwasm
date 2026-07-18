@@ -5,9 +5,9 @@ and the measurable parts of `NFR-1`. It uses
 `org.jetbrains.kotlinx.benchmark` 0.4.17 on JVM and the host Kotlin/Native
 target. Reports use average wall time in `ms/op`.
 
-No performance number is claimed in this repository until a report has
-actually been produced. In particular, the checked-in external-comparison
-file is explicitly `unmeasured`.
+No performance number is claimed from a checked-in placeholder. CI creates
+the external-comparison report from both runtimes in one benchmark process
+and preserves the raw and normalized evidence.
 
 ## Workloads
 
@@ -90,9 +90,18 @@ Run the deterministic gate-tool tests without executing benchmarks:
 
 No third-party benchmark binary is vendored. Repositories and immutable
 commits for Sightglass methodology, EEMBC CoreMark, Chasm, and Chicory are in
-`upstreams.lock.json`. A CoreMark asset needs a separate license/provenance
-review and must be a freestanding module for the current seam. The dedicated
-external profile runs only CoreMark:
+`upstreams.lock.json`. EEMBC distributes CoreMark under Apache-2.0 together
+with its acceptable-use and result-disclosure terms. The comparison uses the
+exact `coremark.wasm` fixture shipped by Chasm 1.4.8, records the commit that
+introduced it, and rejects any bytes whose SHA-256 is not the locked value.
+
+Prepare the immutable Chasm checkout:
+
+```shell
+export KWASM_COREMARK_WASM="$(scripts/prepare-benchmark-upstreams.sh)"
+```
+
+Run CoreMark alone:
 
 ```shell
 KWASM_COREMARK_WASM=/absolute/path/coremark.wasm \
@@ -100,24 +109,27 @@ KWASM_COREMARK_EXPORT=run \
 ./gradlew :benchmarks:jvmExternalBenchmark
 ```
 
-Setting the same environment variables while running `jvmPerformanceGate`
-also adds CoreMark to the default report, allowing a complete Chasm geomean
-comparison to activate.
-
-Chasm (JVM and Native) and Chicory interpreter/compiler (JVM) measurements
-are imported through
-`baselines/external-comparisons.schema.json`. Supply that file to the gate:
+For the NFR-1 comparison, `externalComparison` runs kwasm and the pinned
+Chasm KMP interpreter against the same module bytes and arguments in one
+process. It covers fib(35), SHA, JSON, and CoreMark on JVM and every declared
+Native benchmark target. The report task verifies the CoreMark checksum and
+records both scores, benchmark names, target, machine, command, UTC timestamp,
+and Chasm commit:
 
 ```shell
+./gradlew :benchmarks:jvmExternalComparisonReport
+
 ./gradlew :benchmarks:jvmPerformanceGate \
-  -Pkwasm.benchmark.externalComparisons=/path/to/measured-comparisons.json
+  -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json
 ```
 
-Chicory ratios are informational. Same-target Chasm rows for fib, SHA, JSON,
-and CoreMark activate the `NFR-1` ≤2.5× geomean gate. A partial set is
-reported as `partial` and is not treated as proof of the requirement. Missing
-records remain `unmeasured`; they never become a zero, synthetic baseline, or
-pass.
+Replace `jvm` with `macosArm64`, `macosX64`, `linuxArm64`, or `linuxX64` for
+the per-target Native tasks. Same-target Chasm rows for all four workloads
+activate the fatal `NFR-1` ≤2.5× geomean gate. A partial set is reported as
+`partial` and is not treated as proof. Missing records remain `unmeasured`;
+they never become a zero, synthetic baseline, or pass. The schema still
+accepts separately collected Chicory interpreter/compiler rows as
+informational JVM context.
 
 For comparable runs, use an idle dedicated runner, fixed power/performance
 settings, the same commit and benchmark profile, and preserve the raw report,
@@ -131,3 +143,29 @@ The performance workflow separately builds the real JVM smoke application
 with GraalVM `native-image --no-fallback` and executes it. JMH itself is not
 used as the native-image proof because its reflective discovery machinery
 would test JMH configuration rather than kwasm's zero-reflection runtime.
+
+## iOS incremental footprint
+
+`NFR-2` is enforced with two application-style Kotlin/Native release
+frameworks and two final iOS arm64 Mach-O executables:
+
+- the baseline executes a real `runBlocking`/`yield` path, so Kotlin and
+  `kotlinx.coroutines` are present in both outputs;
+- the core probe internally decodes, validates, instantiates, and executes a
+  Wasm function returning `i32.const 42`;
+- `:core` is an implementation dependency, not exported through the
+  Objective-C API;
+- both release frameworks use Kotlin/Native `smallBinary=true` and
+  `latin1Strings=true`;
+- both final executables use linker dead-code elimination and are stripped
+  before their byte sizes are compared.
+
+Run the macOS/Xcode-only gate with:
+
+```shell
+bash scripts/verify-ios-core-footprint.sh
+```
+
+The machine-readable evidence is written to
+`build/ios-footprint/report.json`. The gate requires the core executable minus
+the baseline executable to be at most 1,500,000 bytes.

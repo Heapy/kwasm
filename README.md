@@ -16,9 +16,13 @@ snapshotted.
 > yet claim complete WebAssembly 3.0 conformance. GC, typed references, both
 > exception encodings, tail calls, memory64, and multiple memories have
 > executable implementations; fixed and relaxed SIMD plus threads are decoded
-> and rejected as deferred features. Reproducible full-corpus, cross-target,
-> compatibility-matrix, fuzz, and performance release gates remain open. Do
-> not deploy kwasm as a security boundary without an independent review.
+> and rejected as deferred features. CI contains pinned full-corpus,
+> cross-target, Kotlin/Wasm compiler/EH, nightly differential-fuzz, and
+> self-history performance and iOS incremental-footprint gates. The benchmark
+> harness enforces same-machine, checksum-pinned Chasm/CoreMark comparisons on
+> JVM and Native; current local evidence passes those performance gates and the
+> paired iOS footprint gate. An independent security review remains open; do
+> not deploy kwasm as a security boundary without that review.
 
 The implementation contract and requirement IDs live in
 [kwasm-spec.md](kwasm-spec.md).

@@ -39,6 +39,37 @@ def normalized(target="jvm", enabled_ratio=1.01):
     }
 
 
+def paired_external_normalized(target="jvm", kwasm_score=2.0, chasm_score=1.0):
+    report = normalized(target=target)
+    for suffix in performance_gate.CANONICAL_EXTERNAL_WORKLOADS.values():
+        matching = [
+            measurement
+            for measurement in report["measurements"]
+            if measurement["name"].endswith(suffix)
+        ]
+        if matching:
+            matching[0]["scoreMsPerOp"] = kwasm_score
+        else:
+            report["measurements"].append(
+                {
+                    "name": f"io.heapy.kwasm.benchmarks.{suffix}",
+                    "scoreMsPerOp": kwasm_score,
+                    "scoreErrorMsPerOp": 0.0,
+                    "sourceUnit": "ms/op",
+                },
+            )
+    for suffix in performance_gate.CHASM_EXTERNAL_WORKLOADS.values():
+        report["measurements"].append(
+            {
+                "name": f"io.heapy.kwasm.benchmarks.{suffix}",
+                "scoreMsPerOp": chasm_score,
+                "scoreErrorMsPerOp": 0.0,
+                "sourceUnit": "ms/op",
+            },
+        )
+    return report
+
+
 class PerformanceGateTest(unittest.TestCase):
     def test_latest_target_report_uses_timestamp_directory_order(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -169,6 +200,89 @@ class PerformanceGateTest(unittest.TestCase):
 
         self.assertTrue(failed)
         self.assertEqual("fail", result["gates"][4]["status"])
+
+    def test_paired_external_report_is_extracted_with_both_scores(self):
+        comparisons = performance_gate.extract_external_comparisons(
+            paired_external_normalized(),
+            measurement_command="./gradlew :benchmarks:jvmExternalComparisonBenchmark",
+            machine="test machine",
+            measured_at_utc="2026-07-18T00:00:00Z",
+            coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            upstream_lock="../upstreams.lock.json",
+        )
+
+        self.assertEqual("measured", comparisons["measurementStatus"])
+        self.assertEqual(4, len(comparisons["records"]))
+        self.assertEqual(
+            {"coremark", "fib35", "json", "sha256"},
+            {record["workload"] for record in comparisons["records"]},
+        )
+        self.assertTrue(
+            all(record["kwasmScoreMsPerOp"] > 0 for record in comparisons["records"]),
+        )
+
+    def test_paired_external_scores_cover_coremark_absent_from_main_profile(self):
+        comparisons = performance_gate.extract_external_comparisons(
+            paired_external_normalized(kwasm_score=2.0, chasm_score=1.0),
+            measurement_command="./gradlew benchmark",
+            machine="test machine",
+            measured_at_utc="2026-07-18T00:00:00Z",
+            coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            upstream_lock="../upstreams.lock.json",
+        )
+
+        result, failed = performance_gate.verify_report(
+            normalized(),
+            baseline=None,
+            external_comparisons=comparisons,
+            max_regression_percent=10.0,
+            enforce_snapshot_target=False,
+        )
+
+        self.assertFalse(failed)
+        gate = result["gates"][4]
+        self.assertEqual("pass", gate["status"])
+        self.assertEqual(
+            {"coremark", "fib35", "json", "sha256"},
+            set(gate["measuredChasmWorkloads"]),
+        )
+
+    def test_external_extraction_rejects_unpinned_coremark(self):
+        with self.assertRaisesRegex(
+            performance_gate.GateInputError,
+            "checksum",
+        ):
+            performance_gate.extract_external_comparisons(
+                paired_external_normalized(),
+                measurement_command="./gradlew benchmark",
+                machine="test machine",
+                measured_at_utc="2026-07-18T00:00:00Z",
+                coremark_sha256="0" * 64,
+                upstream_lock="../upstreams.lock.json",
+            )
+
+    def test_paired_external_gate_rejects_tampered_coremark_provenance(self):
+        comparisons = performance_gate.extract_external_comparisons(
+            paired_external_normalized(),
+            measurement_command="./gradlew benchmark",
+            machine="test machine",
+            measured_at_utc="2026-07-18T00:00:00Z",
+            coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            upstream_lock="../upstreams.lock.json",
+        )
+        comparisons["records"][0]["coreMarkSha256"] = "0" * 64
+
+        with self.assertRaisesRegex(
+            performance_gate.GateInputError,
+            "pinned CoreMark fixture",
+        ):
+            performance_gate.verify_report(
+                normalized(),
+                baseline=None,
+                external_comparisons=comparisons,
+                max_regression_percent=10.0,
+                enforce_snapshot_target=False,
+            )
 
     def test_partial_chasm_rows_are_not_reported_as_proof(self):
         comparisons = {

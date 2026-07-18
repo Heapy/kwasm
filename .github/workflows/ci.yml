@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   kotlin-wasm-compiler-compatibility:
-    name: Kotlin/Wasm compilers 2.4.10 and 2.3.21
+    name: Kotlin/Wasm 2.4.10/2.3.21 × 2 EH encodings
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -33,7 +33,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Build and execute both pinned compiler rows
+      - name: Build and execute all four pinned compiler/EH rows
         shell: bash
         run: bash scripts/verify-kotlin-wasm-compiler-compatibility.sh
 

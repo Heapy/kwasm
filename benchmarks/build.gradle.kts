@@ -30,6 +30,7 @@ kotlin {
             implementation(project(":core"))
             implementation(project(":snapshot"))
             implementation(project(":test-support-wat"))
+            implementation(libs.chasm.kmp)
             implementation(libs.kotlinx.benchmark.runtime)
             implementation(libs.kotlinx.coroutines.core)
         }
@@ -52,6 +53,7 @@ benchmark {
             if (!hasCoreMarkAsset.get()) {
                 exclude("ExternalCoreMarkBenchmark")
             }
+            exclude("PinnedChasmBenchmark")
             advanced("jvmForks", 1)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
@@ -69,6 +71,34 @@ benchmark {
             exclude("fib35")
             exclude("Snapshot64MiBBenchmark")
             exclude("ExternalCoreMarkBenchmark")
+            exclude("PinnedChasmBenchmark")
+            advanced("jvmForks", 0)
+        }
+        register("hotSmoke") {
+            warmups = 1
+            iterations = 1
+            iterationTime = 50
+            iterationTimeUnit = "ms"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
+            include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
+            include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
+            advanced("jvmForks", 0)
+        }
+        register("checkpointSmoke") {
+            warmups = 1
+            iterations = 1
+            iterationTime = 50
+            iterationTimeUnit = "ms"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("CallBoundaryBenchmark.hostToGuestPlainCheckpoint")
+            include("GuestWorkloadsBenchmark.fib35Checkpoint")
+            include("GuestWorkloadsBenchmark.sha256LoopCheckpoint")
+            include("GuestWorkloadsBenchmark.jsonParseCheckpoint")
             advanced("jvmForks", 0)
         }
         register("external") {
@@ -82,6 +112,23 @@ benchmark {
             include("ExternalCoreMarkBenchmark")
             advanced("jvmForks", 1)
             advanced("nativeFork", "perBenchmark")
+        }
+        register("externalComparison") {
+            warmups = 3
+            iterations = 5
+            iterationTime = 1
+            iterationTimeUnit = "s"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
+            include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
+            include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
+            include("ExternalCoreMarkBenchmark")
+            include("PinnedChasmBenchmark")
+            advanced("jvmForks", 1)
+            advanced("nativeFork", "perBenchmark")
+            advanced("nativeGCAfterIteration", true)
         }
     }
 
@@ -100,7 +147,13 @@ val benchmarkTargets = listOf("jvm", "macosArm64", "macosX64", "linuxArm64", "li
 benchmarkTargets.forEach { target ->
     val capitalized = target.replaceFirstChar { it.uppercaseChar() }
     val rawReportRoot = layout.buildDirectory.dir("reports/benchmarks/main")
+    val rawExternalReportRoot =
+        layout.buildDirectory.dir("reports/benchmarks/externalComparison")
     val normalizedReport = layout.buildDirectory.file("performance/current-$target.json")
+    val normalizedExternalReport =
+        layout.buildDirectory.file("performance/external-current-$target.json")
+    val externalComparisonsReport =
+        layout.buildDirectory.file("performance/external-comparisons-$target.json")
     val gateReport = layout.buildDirectory.file("performance/gate-$target.json")
 
     val normalize = tasks.register<Exec>("normalize${capitalized}Benchmark") {
@@ -120,6 +173,70 @@ benchmarkTargets.forEach { target ->
             target,
             "--output",
             normalizedReport.get().asFile.absolutePath,
+        )
+    }
+
+    val normalizeExternal =
+        tasks.register<Exec>("normalize${capitalized}ExternalComparison") {
+            group = "verification"
+            description =
+                "Normalize the paired kwasm/Chasm $target comparison report."
+            dependsOn("${target}ExternalComparisonBenchmark")
+            inputs.dir(rawExternalReportRoot)
+            inputs.file(gateTool)
+            outputs.file(normalizedExternalReport)
+            commandLine(
+                "python3",
+                gateTool.asFile.absolutePath,
+                "normalize",
+                "--input-directory",
+                rawExternalReportRoot.get().asFile.absolutePath,
+                "--target",
+                target,
+                "--output",
+                normalizedExternalReport.get().asFile.absolutePath,
+            )
+        }
+
+    tasks.register<Exec>("${target}ExternalComparisonReport") {
+        val coreMarkPath = providers.environmentVariable("KWASM_COREMARK_WASM")
+        val machineDescription =
+            providers.environmentVariable("KWASM_BENCHMARK_MACHINE")
+                .orElse(
+                    "${System.getProperty("os.name")} " +
+                        "${System.getProperty("os.arch")} " +
+                        "${System.getProperty("os.version")}",
+                )
+        val coreMarkPathValue = coreMarkPath.orNull.orEmpty()
+        val machineDescriptionValue = machineDescription.get()
+        group = "verification"
+        description =
+            "Extract checksum-pinned same-process kwasm/Chasm evidence for $target."
+        dependsOn(normalizeExternal)
+        inputs.file(normalizedExternalReport)
+        inputs.file(gateTool)
+        inputs.property("coreMarkPath", coreMarkPathValue)
+        inputs.property("machineDescription", machineDescriptionValue)
+        if (coreMarkPathValue.isNotEmpty()) {
+            inputs.file(coreMarkPathValue)
+        }
+        outputs.file(externalComparisonsReport)
+        commandLine(
+            "python3",
+            gateTool.asFile.absolutePath,
+            "extract-external",
+            "--input",
+            normalizedExternalReport.get().asFile.absolutePath,
+            "--output",
+            externalComparisonsReport.get().asFile.absolutePath,
+            "--coremark-wasm",
+            coreMarkPathValue,
+            "--measurement-command",
+            "./gradlew :benchmarks:${target}ExternalComparisonBenchmark",
+            "--machine",
+            machineDescriptionValue,
+            "--upstream-lock",
+            "../upstreams.lock.json",
         )
     }
 

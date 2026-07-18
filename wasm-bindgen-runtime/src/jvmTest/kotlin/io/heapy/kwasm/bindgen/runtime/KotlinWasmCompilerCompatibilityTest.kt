@@ -2,6 +2,7 @@ package io.heapy.kwasm.bindgen.runtime
 
 import io.heapy.kwasm.ExternalValue
 import io.heapy.kwasm.ImportDesc
+import io.heapy.kwasm.Instr
 import io.heapy.kwasm.Linker
 import io.heapy.kwasm.Module
 import io.heapy.kwasm.ModuleValidationLimits
@@ -84,6 +85,24 @@ class KotlinWasmCompilerCompatibilityTest {
             binary.readBytes(),
             ModuleValidationLimits(allowInertV128Types = true),
         )
+        val legacyExceptionInstructions =
+            module.countInstructions { it is Instr.LegacyTry }
+        val standardizedExceptionInstructions =
+            module.countInstructions { it is Instr.TryTable }
+        when {
+            version.endsWith(LEGACY_EH_SUFFIX) -> assertTrue(
+                legacyExceptionInstructions > 0,
+                "Kotlin $version output did not contain the required legacy EH encoding " +
+                    "(legacy=$legacyExceptionInstructions, " +
+                    "standardized=$standardizedExceptionInstructions)",
+            )
+            version.endsWith(NEW_EH_SUFFIX) -> assertTrue(
+                standardizedExceptionInstructions > 0,
+                "Kotlin $version output did not contain the standardized EH encoding " +
+                    "(legacy=$legacyExceptionInstructions, " +
+                    "standardized=$standardizedExceptionInstructions)",
+            )
+        }
         val standardOutput = BufferWasiOutput()
         val standardError = BufferWasiOutput()
         val wasi = WasiPreview1(
@@ -149,6 +168,14 @@ class KotlinWasmCompilerCompatibilityTest {
             "Kotlin $version test runner did not report the known ABI suite:\n$testOutput",
         )
         assertTrue(
+            testOutput.contains(COMPATIBILITY_CORPUS_SUITE),
+            "Kotlin $version test runner did not execute the TCK-5 corpus:\n$testOutput",
+        )
+        assertTrue(
+            testOutput.contains(HELLO_MARKER),
+            "Kotlin $version did not execute the wasmWasi hello-world probe:\n$testOutput",
+        )
+        assertTrue(
             testOutput.contains("testFinished"),
             "Kotlin $version test runner produced no completed test event:\n$testOutput",
         )
@@ -188,5 +215,36 @@ class KotlinWasmCompilerCompatibilityTest {
             "KWASM_KOTLIN_WASM_COMPATIBILITY_PASS"
         const val HOST_ROUND_TRIP_EXPORT: String =
             "__kwasm_bindgen_host_round_trip_v1"
+        const val LEGACY_EH_SUFFIX: String = "-legacy-eh"
+        const val NEW_EH_SUFFIX: String = "-new-eh"
+        const val COMPATIBILITY_CORPUS_SUITE: String =
+            "KotlinWasmCompatibilityCorpusTest"
+        const val HELLO_MARKER: String =
+            "KWASM_KOTLIN_WASM_WASI_HELLO"
     }
+}
+
+private fun Module.countInstructions(predicate: (Instr) -> Boolean): Int =
+    functions.sumOf { function ->
+        function.body.sumOf { instruction -> instruction.countInstructions(predicate) }
+    }
+
+private fun Instr.countInstructions(predicate: (Instr) -> Boolean): Int {
+    val nested =
+        when (this) {
+            is Instr.Block -> body.sumOf { it.countInstructions(predicate) }
+            is Instr.Loop -> body.sumOf { it.countInstructions(predicate) }
+            is Instr.If ->
+                thenBody.sumOf { it.countInstructions(predicate) } +
+                    elseBody.sumOf { it.countInstructions(predicate) }
+            is Instr.TryTable -> body.sumOf { it.countInstructions(predicate) }
+            is Instr.LegacyTry ->
+                body.sumOf { it.countInstructions(predicate) } +
+                    catches.sumOf { catcher ->
+                        catcher.body.sumOf { it.countInstructions(predicate) }
+                    } +
+                    catchAll.orEmpty().sumOf { it.countInstructions(predicate) }
+            else -> 0
+        }
+    return if (predicate(this)) nested + 1 else nested
 }

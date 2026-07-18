@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import pathlib
@@ -59,7 +60,16 @@ CANONICAL_EXTERNAL_WORKLOADS = {
     "json": "GuestWorkloadsBenchmark.jsonParseCheckpointEnabled",
     "coremark": "ExternalCoreMarkBenchmark.coreMarkWasm",
 }
+CHASM_EXTERNAL_WORKLOADS = {
+    "fib35": "PinnedChasmBenchmark.fib35",
+    "sha256": "PinnedChasmBenchmark.sha256",
+    "json": "PinnedChasmBenchmark.json",
+    "coremark": "PinnedChasmBenchmark.coreMark",
+}
 NFR_CHASM_WORKLOADS = frozenset(CANONICAL_EXTERNAL_WORKLOADS)
+COREMARK_FIXTURE_SHA256 = (
+    "77da1d88a16d432a6c74d3e60d1e239003f2adc1e50b31125507bb8e175af05a"
+)
 PINNED_EXTERNAL_COMMITS = {
     "chasm": "9e2e2fa50eef63c793473894633a00e5d58bcefe",
     "chicory-interpreter": "e2e2e4058f49fbffeffc5ea92c54b41534cb45d3",
@@ -203,6 +213,64 @@ def _scores(report: dict[str, Any]) -> dict[str, float]:
     return {
         measurement["name"]: float(measurement["scoreMsPerOp"])
         for measurement in report["measurements"]
+    }
+
+
+def extract_external_comparisons(
+    report: dict[str, Any],
+    measurement_command: str,
+    machine: str,
+    measured_at_utc: str,
+    coremark_sha256: str,
+    upstream_lock: str,
+) -> dict[str, Any]:
+    report = _validate_normalized(report, "paired external comparison report")
+    for field, value in (
+        ("measurement command", measurement_command),
+        ("machine", machine),
+        ("measurement timestamp", measured_at_utc),
+        ("upstream lock", upstream_lock),
+    ):
+        if not isinstance(value, str) or not value:
+            raise GateInputError(f"{field} must be a non-empty string")
+    if coremark_sha256 != COREMARK_FIXTURE_SHA256:
+        raise GateInputError(
+            "CoreMark fixture checksum does not match the pinned Chasm asset",
+        )
+    scores = _scores(report)
+    target = str(report.get("target"))
+    records = []
+    for workload in sorted(NFR_CHASM_WORKLOADS):
+        kwasm_name, kwasm_score = _find_suffix(
+            scores,
+            CANONICAL_EXTERNAL_WORKLOADS[workload],
+        )
+        chasm_name, chasm_score = _find_suffix(
+            scores,
+            CHASM_EXTERNAL_WORKLOADS[workload],
+        )
+        records.append(
+            {
+                "runtime": "chasm",
+                "target": target,
+                "workload": workload,
+                "scoreMsPerOp": chasm_score,
+                "kwasmScoreMsPerOp": kwasm_score,
+                "kwasmBenchmark": kwasm_name,
+                "externalBenchmark": chasm_name,
+                "upstreamCommit": PINNED_EXTERNAL_COMMITS["chasm"],
+                "coreMarkSha256": coremark_sha256,
+                "measurementCommand": measurement_command,
+                "machine": machine,
+                "measuredAtUtc": measured_at_utc,
+            },
+        )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "kwasm-external-comparisons",
+        "upstreamLock": upstream_lock,
+        "measurementStatus": "measured",
+        "records": records,
     }
 
 
@@ -393,11 +461,46 @@ def _external_gate(
         suffix = CANONICAL_EXTERNAL_WORKLOADS.get(workload)
         if suffix is None:
             raise GateInputError(f"unsupported canonical external workload {workload!r}")
-        try:
-            current_name, current_score = _find_suffix(current_scores, suffix)
-        except GateInputError:
-            # CoreMark is intentionally absent from the default profile.
-            continue
+        paired_score = record.get("kwasmScoreMsPerOp")
+        if paired_score is not None:
+            current_name = record.get("kwasmBenchmark")
+            if not isinstance(current_name, str) or not current_name.endswith(suffix):
+                raise GateInputError(
+                    f"external {runtime}/{workload} record has no matching "
+                    "kwasmBenchmark",
+                )
+            external_name = record.get("externalBenchmark")
+            external_suffix = CHASM_EXTERNAL_WORKLOADS.get(workload)
+            if (
+                runtime == "chasm" and
+                (
+                    not isinstance(external_name, str) or
+                    external_suffix is None or
+                    not external_name.endswith(external_suffix)
+                )
+            ):
+                raise GateInputError(
+                    f"external {runtime}/{workload} record has no matching "
+                    "externalBenchmark",
+                )
+            if (
+                runtime == "chasm" and
+                record.get("coreMarkSha256") != COREMARK_FIXTURE_SHA256
+            ):
+                raise GateInputError(
+                    f"external {runtime}/{workload} record is not from the "
+                    "pinned CoreMark fixture",
+                )
+            current_score = _finite_positive(
+                paired_score,
+                f"external.{runtime}.{workload}.kwasmScoreMsPerOp",
+            )
+        else:
+            try:
+                current_name, current_score = _find_suffix(current_scores, suffix)
+            except GateInputError:
+                # CoreMark is intentionally absent from the default profile.
+                continue
         external_score = _finite_positive(
             record.get("scoreMsPerOp"),
             f"external.{runtime}.{workload}.scoreMsPerOp",
@@ -530,6 +633,29 @@ def _verify_command(arguments: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _extract_external_command(arguments: argparse.Namespace) -> int:
+    coremark_bytes = arguments.coremark_wasm.read_bytes()
+    coremark_sha256 = hashlib.sha256(coremark_bytes).hexdigest()
+    measured_at_utc = (
+        arguments.measured_at_utc
+        or dt.datetime.now(dt.timezone.utc).isoformat()
+    )
+    result = extract_external_comparisons(
+        report=_read_json(arguments.input),
+        measurement_command=arguments.measurement_command,
+        machine=arguments.machine,
+        measured_at_utc=measured_at_utc,
+        coremark_sha256=coremark_sha256,
+        upstream_lock=arguments.upstream_lock,
+    )
+    _write_json(arguments.output, result)
+    print(
+        f"extracted {len(result['records'])} pinned Chasm comparison(s) "
+        f"-> {arguments.output}",
+    )
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -541,6 +667,19 @@ def _parser() -> argparse.ArgumentParser:
     normalize.add_argument("--target", required=True)
     normalize.add_argument("--output", type=pathlib.Path, required=True)
     normalize.set_defaults(handler=_normalize_command)
+
+    extract_external = commands.add_parser("extract-external")
+    extract_external.add_argument("--input", type=pathlib.Path, required=True)
+    extract_external.add_argument("--output", type=pathlib.Path, required=True)
+    extract_external.add_argument("--coremark-wasm", type=pathlib.Path, required=True)
+    extract_external.add_argument("--measurement-command", required=True)
+    extract_external.add_argument("--machine", required=True)
+    extract_external.add_argument("--measured-at-utc")
+    extract_external.add_argument(
+        "--upstream-lock",
+        default="../upstreams.lock.json",
+    )
+    extract_external.set_defaults(handler=_extract_external_command)
 
     verify = commands.add_parser("verify")
     verify.add_argument("--current", type=pathlib.Path, required=True)

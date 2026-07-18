@@ -1,8 +1,9 @@
 @file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
 
 import java.io.File
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.testing.Test
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.Kotlin2JsCompile
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -11,6 +12,11 @@ plugins {
     id("com.google.devtools.ksp") version "2.3.10"
     `maven-publish`
 }
+
+val useNewWasmExceptionProposal =
+    providers.gradleProperty("kwasm.kotlinWasmUseNewExceptionProposal")
+        .map { it.toBooleanStrict() }
+        .orElse(true)
 
 kotlin {
     explicitApiWarning()
@@ -47,6 +53,21 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        wasmWasiTest.dependencies {
+            implementation(libs.kotlinx.serialization.json)
+        }
+    }
+}
+
+tasks.withType<Kotlin2JsCompile>().configureEach {
+    if (name.endsWith("KotlinWasmWasi")) {
+        compilerOptions.freeCompilerArgs.add(
+            if (useNewWasmExceptionProposal.get()) {
+                "-Xwasm-use-new-exception-proposal"
+            } else {
+                "-Xwasm-use-new-exception-proposal=false"
+            },
+        )
     }
 }
 

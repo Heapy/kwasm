@@ -21,7 +21,9 @@ class ExecutionTest {
 
         assertEquals(
             listOf(Value.I32(0)),
-            instance.invoke("countdown", listOf(Value.I32(10_000))),
+            withTimeout(30_000) {
+                instance.invoke("countdown", listOf(Value.I32(10_000)))
+            },
         )
     }
 
@@ -310,6 +312,19 @@ class ExecutionTest {
         pause.resume()
 
         assertEquals(listOf(Value.I32(7)), invocation.await())
+    }
+
+    @Test
+    fun pauseFastFlagRemainsSetUntilTheNewestGenerationResumes() {
+        val store = Store()
+        val first = store.requestPause()
+        val second = store.requestPause()
+
+        first.resume()
+        assertTrue(store.controller.hasPauseRequest())
+
+        second.resume()
+        assertFalse(store.controller.hasPauseRequest())
     }
 
     @Test

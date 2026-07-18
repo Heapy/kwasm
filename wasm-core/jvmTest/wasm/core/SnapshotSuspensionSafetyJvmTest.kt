@@ -19,6 +19,62 @@ import kotlin.test.assertTrue
 
 class SnapshotSuspensionSafetyJvmTest {
     @Test
+    fun suspendedHostImportMayResumeOnAnotherThreadWithoutLosingGuestState(): Unit = runBlocking {
+        val type = FuncType(emptyList(), listOf(ValType.I32))
+        val module = validatedModule {
+            types += type
+            imports += Import("host", "resume", ImportDesc.Function(0))
+            exports += Export("resume", ExportDesc.Function(0))
+        }
+        val releaseImport = CompletableDeferred<Int>()
+        var suspensionThread: Thread? = null
+        var resumptionThread: Thread? = null
+        val store = Store()
+        val instance = Instance(
+            store,
+            module,
+            ResolvedImports(
+                functions = listOf(
+                    HostImport(type) {
+                        suspensionThread = Thread.currentThread()
+                        val result = releaseImport.await()
+                        resumptionThread = Thread.currentThread()
+                        listOf(Value.I32(result))
+                    },
+                ),
+            ),
+        )
+        val resumerDispatcher =
+            Executors
+                .newSingleThreadExecutor { runnable ->
+                    Thread(runnable, "kwasm-host-import-resumer")
+                }
+                .asCoroutineDispatcher()
+
+        try {
+            val invocation = async(Dispatchers.Unconfined) {
+                instance.invoke("resume")
+            }
+            store.status.first { it == StoreStatus.InHostImport }
+            assertFalse(invocation.isCompleted)
+
+            withContext(resumerDispatcher) {
+                releaseImport.complete(42)
+            }
+
+            assertEquals(listOf(Value.I32(42)), invocation.await())
+            assertFalse(
+                suspensionThread === resumptionThread,
+                "the host import should resume on the thread that completes its suspension",
+            )
+            assertEquals("kwasm-host-import-resumer", resumptionThread?.name)
+            assertEquals(StoreStatus.Idle, store.status.value)
+        } finally {
+            resumerDispatcher.close()
+        }
+    }
+
+    @Test
     fun hostImportCannotResumeWhileSnapshotTraversalOwnsTheStore(): Unit = runBlocking {
         val type = FuncType(emptyList(), emptyList())
         val module = validatedModule {

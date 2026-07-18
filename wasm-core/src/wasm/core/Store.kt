@@ -2,11 +2,12 @@ package io.heapy.kwasm
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.DisposableHandle
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlin.concurrent.Volatile
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
@@ -114,6 +116,9 @@ public class StoreController internal constructor(initialFuel: Long) {
     private val requestedPause = MutableStateFlow(0L)
     private val observedPause = MutableStateFlow(0L)
     private val resumedPause = MutableStateFlow(0L)
+    @Volatile
+    internal var pausePending: Boolean = false
+        private set
 
     public val fuel: StateFlow<Long> = fuelState.asStateFlow()
 
@@ -126,7 +131,8 @@ public class StoreController internal constructor(initialFuel: Long) {
 
     public fun requestPause(): PauseHandle {
         val generation = increment(requestedPause)
-        return PauseHandle(generation, observedPause, resumedPause)
+        pausePending = true
+        return PauseHandle(generation, observedPause, this)
     }
 
     internal fun tryConsumeFuel(cost: Long): Boolean {
@@ -148,14 +154,34 @@ public class StoreController internal constructor(initialFuel: Long) {
         fuelState.first { it >= minimum }
     }
 
-    internal fun hasPauseRequest(): Boolean =
-        requestedPause.value > resumedPause.value
+    internal fun hasPauseRequest(): Boolean = pausePending
 
     internal suspend fun awaitResume() {
         val generation = requestedPause.value
         if (generation <= resumedPause.value) return
         observedPause.value = generation
         resumedPause.first { it >= generation }
+    }
+
+    internal fun resumePause(generation: Long) {
+        while (true) {
+            val current = resumedPause.value
+            if (
+                current >= generation ||
+                resumedPause.compareAndSet(current, generation)
+            ) {
+                if (resumedPause.value >= requestedPause.value) {
+                    pausePending = false
+                    // A concurrent request can publish its generation before
+                    // setting the fast hint. Recheck after clearing so an
+                    // older resume cannot erase that newer request.
+                    if (resumedPause.value < requestedPause.value) {
+                        pausePending = true
+                    }
+                }
+                return
+            }
+        }
     }
 
     internal fun restoreFuel(value: Long) {
@@ -177,18 +203,13 @@ public class StoreController internal constructor(initialFuel: Long) {
 public class PauseHandle internal constructor(
     private val generation: Long,
     private val observedPause: StateFlow<Long>,
-    private val resumedPause: MutableStateFlow<Long>,
+    private val controller: StoreController,
 ) {
     public suspend fun awaitPaused() {
         observedPause.first { it >= generation }
     }
 
-    public fun resume() {
-        while (true) {
-            val current = resumedPause.value
-            if (current >= generation || resumedPause.compareAndSet(current, generation)) return
-        }
-    }
+    public fun resume(): Unit = controller.resumePause(generation)
 }
 
 /** Description of a host call while its suspend function is parked. */
@@ -226,18 +247,36 @@ public class Store(
     private val executionGate = StoreExecutionGate()
     private var currentPendingImport: PendingImport? = null
     private var running: Boolean = false
+    internal var invocationJob: Job? = null
+    private var invocationCancellationHandle: DisposableHandle? = null
+    @Volatile
+    internal var storeCancellationPending: Boolean = false
+        private set
+    @Volatile
+    internal var invocationCancellationPending: Boolean = false
+        private set
     private var restoredExecution: Boolean = false
     private var snapshotCaptureActive: Boolean = false
     private var stateRevision: Long = 0
 
-    internal val valueStack: ArrayDeque<Value> = ArrayDeque()
+    internal val valueStack: RuntimeValueStack = RuntimeValueStack()
+    internal val localStack: RuntimeValueStack = RuntimeValueStack()
+    internal val i32ExpressionScratch: IntArray =
+        IntArray(MAX_LINEAR_I32_EXPRESSION_DEPTH)
     internal val frames: ArrayDeque<GuestCallFrame> = ArrayDeque()
+    private val reusableFrames: ArrayDeque<GuestCallFrame> = ArrayDeque()
+    private val reusableControls: ArrayDeque<GuestControlFrame> = ArrayDeque()
+    private val linearHotPlans: MutableList<Pair<List<Instr>, ByteArray>> = mutableListOf()
     internal var instructionsUntilCheckpoint: Int = config.checkpointInterval
     internal fun executionContext(callerContext: CoroutineContext): CoroutineContext =
         StoreExecutionInterceptor(
             executionGate,
             callerContext[ContinuationInterceptor],
         )
+
+    init {
+        observeStoreCancellation()
+    }
 
     public fun addFuel(amount: Long) {
         controller.addFuel(amount)
@@ -251,7 +290,10 @@ public class Store(
     }
 
     /** Cancel the store lifetime and any invocation launched in [scope]. */
-    public fun cancel(): Unit = scope.cancel("kwasm store lifetime ended")
+    public fun cancel() {
+        storeCancellationPending = true
+        scope.cancel("kwasm store lifetime ended")
+    }
 
     internal fun register(instance: Instance) {
         ownedInstances.add(instance)
@@ -501,26 +543,29 @@ public class Store(
         }
     }
 
-    internal fun beginInvocation() {
+    internal fun beginInvocation(callerJob: Job?) {
         if (poisoned) throw PoisonedStoreException()
         check(!running) { "store is already executing and is confined to one coroutine at a time" }
         running = true
+        observeInvocationCancellation(callerJob)
         restoredExecution = false
         statusState.value = StoreStatus.Running
         currentPendingImport = null
+        clearGuestFrames()
         valueStack.clear()
-        frames.clear()
+        localStack.clear()
         instructionsUntilCheckpoint = config.checkpointInterval
         stateRevision++
     }
 
-    internal fun beginRestoredInvocation(): PendingImport? {
+    internal fun beginRestoredInvocation(callerJob: Job?): PendingImport? {
         if (poisoned) throw PoisonedStoreException()
         check(!running) { "store is already executing and is confined to one coroutine at a time" }
         if (!restoredExecution) {
             throw SnapshotStateException("store has no restored execution to resume")
         }
         running = true
+        observeInvocationCancellation(callerJob)
         restoredExecution = false
         statusState.value = StoreStatus.Running
         stateRevision++
@@ -529,9 +574,11 @@ public class Store(
 
     internal fun finishInvocation() {
         currentPendingImport = null
+        clearGuestFrames()
         valueStack.clear()
-        frames.clear()
+        localStack.clear()
         running = false
+        clearInvocationCancellation()
         restoredExecution = false
         if (!poisoned) statusState.value = StoreStatus.Idle
         stateRevision++
@@ -541,8 +588,10 @@ public class Store(
         statusState.value = StoreStatus.Poisoned
         running = false
         currentPendingImport = null
+        clearGuestFrames()
         valueStack.clear()
-        frames.clear()
+        localStack.clear()
+        clearInvocationCancellation()
         restoredExecution = false
         stateRevision++
     }
@@ -563,11 +612,62 @@ public class Store(
      * Keep this to the specified countdown decrement and branch; in
      * particular it performs no config/fuel load per guest instruction.
      */
-    internal suspend fun beforeUnmeteredInstruction(forceCheckpoint: Boolean = false) {
+    internal fun beforeUnmeteredInstructionRequiresSlowCheckpoint(
+        forceCheckpoint: Boolean = false,
+    ): Boolean {
         instructionsUntilCheckpoint--
-        if (forceCheckpoint || instructionsUntilCheckpoint <= 0) {
-            checkpoint(handleFuel = false)
+        if (!forceCheckpoint && instructionsUntilCheckpoint > 0) return false
+        return checkpointRequiresSlowCheckpoint()
+    }
+
+    /**
+     * Completes the common no-pause checkpoint path synchronously. Returning
+     * true delegates the uncommon suspending pause path to [checkpoint].
+     */
+    internal fun checkpointRequiresSlowCheckpoint(): Boolean {
+        if (storeCancellationPending) job.ensureActive()
+        if (invocationCancellationPending) invocationJob?.ensureActive()
+        config.listener?.let { listener ->
+            val frame = frames.lastOrNull()
+            listener.onCheckpoint(
+                this,
+                frame?.functionIndex,
+                frame?.currentInstructionIndex,
+            )
         }
+        if (controller.hasPauseRequest()) return true
+        instructionsUntilCheckpoint = config.checkpointInterval
+        return false
+    }
+
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeStoreCancellation() {
+        job.invokeOnCompletion(
+            onCancelling = true,
+            invokeImmediately = true,
+        ) { failure ->
+            if (failure != null) storeCancellationPending = true
+        }
+    }
+
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeInvocationCancellation(callerJob: Job?) {
+        invocationCancellationHandle?.dispose()
+        invocationCancellationPending = false
+        invocationJob = callerJob
+        invocationCancellationHandle = callerJob?.invokeOnCompletion(
+            onCancelling = true,
+            invokeImmediately = true,
+        ) { failure ->
+            if (failure != null) invocationCancellationPending = true
+        }
+    }
+
+    private fun clearInvocationCancellation() {
+        invocationCancellationHandle?.dispose()
+        invocationCancellationHandle = null
+        invocationCancellationPending = false
+        invocationJob = null
     }
 
     internal suspend fun beforeMeteredInstruction(
@@ -585,11 +685,21 @@ public class Store(
         }
     }
 
-    internal suspend fun checkpoint(handleFuel: Boolean, requiredFuel: Long = 1L) {
+    internal suspend fun checkpoint(
+        handleFuel: Boolean,
+        requiredFuel: Long = 1L,
+        listenerAlreadyNotified: Boolean = false,
+    ) {
         job.ensureActive()
-        currentCoroutineContext().ensureActive()
+        invocationJob?.ensureActive()
         val frame = frames.lastOrNull()
-        config.listener?.onCheckpoint(this, frame?.functionIndex, frame?.currentInstructionIndex)
+        if (!listenerAlreadyNotified) {
+            config.listener?.onCheckpoint(
+                this,
+                frame?.functionIndex,
+                frame?.currentInstructionIndex,
+            )
+        }
 
         if (handleFuel) {
             when (config.fuelExhaustionPolicy) {
@@ -601,7 +711,7 @@ public class Store(
                 FuelExhaustionPolicy.Suspend -> {
                     statusState.value = StoreStatus.WaitingForFuel
                     controller.awaitFuel(requiredFuel)
-                    currentCoroutineContext().ensureActive()
+                    invocationJob?.ensureActive()
                     statusState.value = StoreStatus.Running
                 }
             }
@@ -610,7 +720,7 @@ public class Store(
         if (controller.hasPauseRequest()) {
             statusState.value = StoreStatus.Paused
             controller.awaitResume()
-            currentCoroutineContext().ensureActive()
+            invocationJob?.ensureActive()
             statusState.value = StoreStatus.Running
         }
         instructionsUntilCheckpoint = config.checkpointInterval
@@ -622,6 +732,223 @@ public class Store(
                 TrapKind.STACK_EXHAUSTED,
                 "value stack has ${valueStack.size} slots; maximum is ${config.limits.maxValueStackSlots}",
             )
+        }
+    }
+
+    internal fun acquireGuestControl(
+        kind: ControlKind,
+        body: List<Instr>,
+        pc: Int,
+        stackBase: Int,
+        parameterCount: Int,
+        resultCount: Int,
+        labelArity: Int,
+        exceptionHandler: GuestExceptionHandler? = null,
+        caughtException: GuestException? = null,
+    ): GuestControlFrame {
+        val linearHotPlan = linearHotPlan(body)
+        val control = reusableControls.removeLastOrNull()
+            ?: return GuestControlFrame(
+                kind,
+                body,
+                pc,
+                stackBase,
+                parameterCount,
+                resultCount,
+                labelArity,
+                exceptionHandler,
+                caughtException,
+                linearHotPlan,
+            )
+        control.kind = kind
+        control.body = body
+        control.pc = pc
+        control.stackBase = stackBase
+        control.parameterCount = parameterCount
+        control.resultCount = resultCount
+        control.labelArity = labelArity
+        control.exceptionHandler = exceptionHandler
+        control.caughtException = caughtException
+        control.linearHotPlan = linearHotPlan
+        return control
+    }
+
+    internal fun linearHotPlan(body: List<Instr>): ByteArray {
+        linearHotPlans.firstOrNull { (candidate, _) -> candidate === body }
+            ?.let { return it.second }
+        val plan = ByteArray(body.size)
+        for (index in body.indices) {
+            val first = body[index]
+            val second = body.getOrNull(index + 1)
+            val third = body.getOrNull(index + 2)
+            val expressionLength = body.i32ExpressionLengthFrom(index)
+            if (expressionLength >= MIN_LINEAR_I32_EXPRESSION_LENGTH) {
+                plan[index] = (LINEAR_PLAN_I32_EXPRESSION_OFFSET + expressionLength).toByte()
+                continue
+            }
+            if (
+                first is Instr.Simple &&
+                first.opcode.isPlannedI32Binary() &&
+                second is Instr.FcIndex &&
+                second.opcode == 0x21
+            ) {
+                plan[index] = LINEAR_PLAN_STACK_BINARY_SET
+                continue
+            }
+            if (
+                first is Instr.I32Const &&
+                second is Instr.Simple &&
+                second.opcode.isPlannedI32Binary()
+            ) {
+                plan[index] =
+                    if (third is Instr.FcIndex && third.opcode == 0x21) {
+                        LINEAR_PLAN_CONST_BINARY_SET
+                    } else {
+                        LINEAR_PLAN_CONST_BINARY
+                    }
+                continue
+            }
+            if (first !is Instr.FcIndex || first.opcode != 0x20) continue
+            if (
+                second is Instr.Simple &&
+                second.opcode.isPlannedI32Binary()
+            ) {
+                plan[index] =
+                    if (third is Instr.FcIndex && third.opcode == 0x21) {
+                        LINEAR_PLAN_LOCAL_BINARY_SET
+                    } else {
+                        LINEAR_PLAN_LOCAL_BINARY
+                    }
+                continue
+            }
+            if (
+                second is Instr.Load &&
+                second.opcode.isPlannedI32Load()
+            ) {
+                if (
+                    third is Instr.Load &&
+                    third.opcode.isPlannedI32Load()
+                ) {
+                    val fourth = body.getOrNull(index + 3)
+                    plan[index] = when {
+                        fourth is Instr.FcIndex && fourth.opcode == 0x21 ->
+                            LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET
+                        fourth is Instr.FcIndex && fourth.opcode == 0x22 ->
+                            LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE
+                        else -> LINEAR_PLAN_LOCAL_I32_LOAD_LOAD
+                    }
+                } else {
+                    plan[index] = when {
+                        third is Instr.FcIndex && third.opcode == 0x21 ->
+                            LINEAR_PLAN_LOCAL_I32_LOAD_SET
+                        third is Instr.FcIndex && third.opcode == 0x22 ->
+                            LINEAR_PLAN_LOCAL_I32_LOAD_TEE
+                        else -> LINEAR_PLAN_LOCAL_I32_LOAD
+                    }
+                }
+                continue
+            }
+            if (
+                second !is Instr.I32Const &&
+                (second !is Instr.FcIndex || second.opcode != 0x20)
+            ) {
+                continue
+            }
+            val operation = third as? Instr.Simple ?: continue
+            if (operation.opcode.isPlannedI32Binary()) {
+                val fourth = body.getOrNull(index + 3)
+                plan[index] = when {
+                    fourth is Instr.FcIndex && fourth.opcode == 0x21 ->
+                        LINEAR_PLAN_PRODUCERS_BINARY_SET
+                    fourth is Instr.Simple && fourth.opcode.isPlannedI32Binary() -> {
+                        val fifth = body.getOrNull(index + 4)
+                        when {
+                            fifth is Instr.FcIndex && fifth.opcode == 0x21 ->
+                                LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET
+                            fifth is Instr.Simple && fifth.opcode.isPlannedI32Binary() -> {
+                                val sixth = body.getOrNull(index + 5)
+                                if (sixth is Instr.FcIndex && sixth.opcode == 0x21) {
+                                    LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET
+                                } else {
+                                    LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY
+                                }
+                            }
+                            else -> LINEAR_PLAN_PRODUCERS_BINARY_BINARY
+                        }
+                    }
+                    else -> LINEAR_PLAN_PRODUCERS_BINARY
+                }
+            }
+        }
+        linearHotPlans.add(body to plan)
+        return plan
+    }
+
+    internal fun releaseLastGuestControl(frame: GuestCallFrame) {
+        releaseGuestControl(frame.controls.removeLast())
+    }
+
+    internal fun acquireGuestFrame(
+        instance: Instance,
+        functionIndex: Int,
+        functionName: String?,
+        type: FuncType,
+        localsBase: Int,
+        localCount: Int,
+        stackBase: Int,
+        root: GuestControlFrame,
+    ): GuestCallFrame {
+        val frame = reusableFrames.removeLastOrNull()
+            ?: GuestCallFrame(
+                instance,
+                functionIndex,
+                functionName,
+                type,
+                localsBase,
+                localCount,
+                stackBase,
+                ArrayDeque(),
+            )
+        frame.instance = instance
+        frame.functionIndex = functionIndex
+        frame.functionName = functionName
+        frame.type = type
+        frame.localsBase = localsBase
+        frame.localCount = localCount
+        frame.stackBase = stackBase
+        frame.controls.clear()
+        frame.controls.addLast(root)
+        return frame
+    }
+
+    internal fun removeLastGuestFrame(): GuestCallFrame {
+        val frame = frames.removeLast()
+        localStack.truncate(frame.localsBase)
+        while (frame.controls.isNotEmpty()) {
+            releaseGuestControl(frame.controls.removeLast())
+        }
+        return frame
+    }
+
+    internal fun releaseGuestFrame(frame: GuestCallFrame) {
+        if (reusableFrames.size < MAX_REUSABLE_FRAMES) {
+            reusableFrames.addLast(frame)
+        }
+    }
+
+    private fun releaseGuestControl(control: GuestControlFrame) {
+        if (reusableControls.size < MAX_REUSABLE_CONTROLS) {
+            control.body = emptyList()
+            control.exceptionHandler = null
+            control.caughtException = null
+            control.linearHotPlan = EMPTY_LINEAR_HOT_PLAN
+            reusableControls.addLast(control)
+        }
+    }
+
+    private fun clearGuestFrames() {
+        while (frames.isNotEmpty()) {
+            releaseGuestFrame(removeLastGuestFrame())
         }
     }
 
@@ -692,7 +1019,7 @@ public class Store(
             )
             RuntimeFrameSnapshot(
                 functionIndex = frame.functionIndex,
-                locals = frame.locals,
+                locals = localStack.toList(frame.localsBase, frame.localCount),
                 stackBase = frame.stackBase,
                 controls = frame.controls.map { control ->
                     RuntimeControlSnapshot(
@@ -822,9 +1149,10 @@ public class Store(
     ) {
         instance.restoreRuntimeSnapshot(snapshot.instance)
         controller.restoreFuel(snapshot.fuel)
+        clearGuestFrames()
         valueStack.clear()
         snapshot.valueStack().forEach(valueStack::addLast)
-        frames.clear()
+        localStack.clear()
         snapshot.frames.forEach { frameSnapshot ->
             val type = instance.functionType(frameSnapshot.functionIndex)
             val function = instance.module.functions[
@@ -848,9 +1176,13 @@ public class Store(
                             control.bodyPath,
                         ),
                         caughtException = control.caughtException,
+                        linearHotPlan = linearHotPlan(body),
                     ),
                 )
             }
+            val locals = frameSnapshot.locals()
+            val localsBase = localStack.size
+            locals.forEach(localStack::addLast)
             frames.addLast(
                 GuestCallFrame(
                     instance = instance,
@@ -859,7 +1191,8 @@ public class Store(
                         ?.functionNames
                         ?.get(frameSnapshot.functionIndex),
                     type = type,
-                    locals = frameSnapshot.locals().toMutableList(),
+                    localsBase = localsBase,
+                    localCount = locals.size,
                     stackBase = frameSnapshot.stackBase,
                     controls = controls,
                 ),
@@ -1123,29 +1456,96 @@ internal sealed class GuestExceptionHandler {
     ) : GuestExceptionHandler()
 }
 
-internal data class GuestControlFrame(
-    val kind: ControlKind,
+internal class GuestControlFrame(
+    var kind: ControlKind,
     var body: List<Instr>,
     var pc: Int,
-    val stackBase: Int,
-    val parameterCount: Int,
-    val resultCount: Int,
-    val labelArity: Int,
+    var stackBase: Int,
+    var parameterCount: Int,
+    var resultCount: Int,
+    var labelArity: Int,
     var exceptionHandler: GuestExceptionHandler? = null,
     var caughtException: GuestException? = null,
+    var linearHotPlan: ByteArray = EMPTY_LINEAR_HOT_PLAN,
 )
 
-internal data class GuestCallFrame(
-    val instance: Instance,
-    val functionIndex: Int,
-    val functionName: String?,
-    val type: FuncType,
-    val locals: MutableList<Value>,
-    val stackBase: Int,
+internal class GuestCallFrame(
+    var instance: Instance,
+    var functionIndex: Int,
+    var functionName: String?,
+    var type: FuncType,
+    var localsBase: Int,
+    var localCount: Int,
+    var stackBase: Int,
     val controls: ArrayDeque<GuestControlFrame>,
 ) {
     val currentInstructionIndex: Int
         get() = (controls.lastOrNull()?.pc ?: 1) - 1
+}
+
+private const val MAX_REUSABLE_FRAMES: Int = 256
+private const val MAX_REUSABLE_CONTROLS: Int = 1_024
+private val EMPTY_LINEAR_HOT_PLAN: ByteArray = ByteArray(0)
+
+internal const val MAX_LINEAR_I32_EXPRESSION_DEPTH: Int = 8
+internal const val LINEAR_PLAN_I32_EXPRESSION_OFFSET: Int = 16
+private const val MIN_LINEAR_I32_EXPRESSION_LENGTH: Int = 6
+private const val MAX_LINEAR_I32_EXPRESSION_LENGTH: Int =
+    Byte.MAX_VALUE - LINEAR_PLAN_I32_EXPRESSION_OFFSET
+
+internal const val LINEAR_PLAN_STACK_BINARY_SET: Byte = -2
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_SET: Byte = -4
+internal const val LINEAR_PLAN_LOCAL_BINARY_SET: Byte = -5
+internal const val LINEAR_PLAN_CONST_BINARY_SET: Byte = -6
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET: Byte = -7
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET: Byte = -8
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD_SET: Byte = -9
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD_TEE: Byte = -10
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET: Byte = -11
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE: Byte = -12
+internal const val LINEAR_PLAN_CONST_BINARY: Byte = 2
+internal const val LINEAR_PLAN_PRODUCERS_BINARY: Byte = 3
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY: Byte = 4
+internal const val LINEAR_PLAN_LOCAL_BINARY: Byte = 5
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY: Byte = 6
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD: Byte = 7
+internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD: Byte = 8
+
+private fun Int.isPlannedI32Binary(): Boolean =
+    this in 0x46..0x4F || this in 0x6A..0x78
+
+private fun Int.isPlannedI32Load(): Boolean =
+    this == 0x28 || this in 0x2C..0x2F
+
+private fun List<Instr>.i32ExpressionLengthFrom(start: Int): Int {
+    var depth = 0
+    val endExclusive =
+        minOf(size, start + MAX_LINEAR_I32_EXPRESSION_LENGTH)
+    for (index in start until endExclusive) {
+        when (val instruction = this[index]) {
+            is Instr.I32Const -> {
+                if (depth == MAX_LINEAR_I32_EXPRESSION_DEPTH) return 0
+                depth++
+            }
+            is Instr.FcIndex -> when (instruction.opcode) {
+                0x20 -> {
+                    if (depth == MAX_LINEAR_I32_EXPRESSION_DEPTH) return 0
+                    depth++
+                }
+                0x21 -> {
+                    if (depth != 1) return 0
+                    return index - start + 1
+                }
+                else -> return 0
+            }
+            is Instr.Simple -> {
+                if (!instruction.opcode.isPlannedI32Binary() || depth < 2) return 0
+                depth--
+            }
+            else -> return 0
+        }
+    }
+    return 0
 }
 
 private fun ControlKind.toRuntimeKind(): RuntimeControlKind = when (this) {
