@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/heapy/kwasm/benchmarks/external-comparisons.schema.json",
+  "title": "kwasm external runtime comparison measurements",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "upstreamLock",
+    "measurementStatus",
+    "records"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "kwasm-external-comparisons"
+    },
+    "upstreamLock": {
+      "type": "string"
+    },
+    "measurementStatus": {
+      "enum": [
+        "measured",
+        "partially-measured",
+        "unmeasured"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "runtime",
+          "target",
+          "workload",
+          "scoreMsPerOp",
+          "upstreamCommit",
+          "measurementCommand",
+          "machine",
+          "measuredAtUtc"
+        ],
+        "properties": {
+          "runtime": {
+            "enum": [
+              "chasm",
+              "chicory-interpreter",
+              "chicory-compiler"
+            ]
+          },
+          "target": {
+            "enum": [
+              "jvm",
+              "macosArm64",
+              "macosX64",
+              "linuxArm64",
+              "linuxX64"
+            ]
+          },
+          "workload": {
+            "enum": [
+              "fib35",
+              "sha256",
+              "json",
+              "coremark"
+            ]
+          },
+          "scoreMsPerOp": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "upstreamCommit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "measurementCommand": {
+            "type": "string",
+            "minLength": 1
+          },
+          "machine": {
+            "type": "string",
+            "minLength": 1
+          },
+          "measuredAtUtc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,7 @@
+# Official wasi-testsuite Preview 1 exclusions.
+#
+# Strict format:
+# <path-relative-to-configured-suite-root>.wasm https://github.com/heapy/kwasm/issues/123
+#
+# This file is deliberately empty until a failing in-scope fixture has a
+# dedicated tracking issue. Unlisted failures remain hard test failures.

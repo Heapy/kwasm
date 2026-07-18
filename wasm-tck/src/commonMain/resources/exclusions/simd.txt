@@ -1,0 +1,2 @@
+# Fixed-width and relaxed SIMD are deferred. Add exclusions as:
+# path/to/test.wast[:line] https://github.com/heapy/kwasm/issues/123

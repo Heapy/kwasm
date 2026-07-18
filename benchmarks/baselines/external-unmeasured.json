@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "kind": "kwasm-external-comparisons",
+  "upstreamLock": "../upstreams.lock.json",
+  "measurementStatus": "unmeasured",
+  "reason": "No license-reviewed CoreMark asset or same-machine Chasm/Chicory run has been recorded yet.",
+  "records": []
+}

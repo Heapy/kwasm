@@ -1,0 +1,16 @@
+# Whole-script exclusions for WABT wast2json at commit
+# 11602da5423eb9c7517311ed01917ea231594170 against WebAssembly spec wg-3.0
+# (9d36019973201a19f9c9ebb0f10828b2fe2374aa).
+#
+# These scripts cannot be converted by the pinned WABT parser. They are not
+# generated, loaded, or executed by kwasm. The scheduled conformance workflow
+# fails if a path disappears or becomes convertible, so every entry remains
+# both issue-backed and temporary.
+annotations.wast https://github.com/WebAssembly/wabt/issues/1404
+instance.wast https://github.com/WebAssembly/wabt/issues/2666
+memory.wast https://github.com/WebAssembly/wabt/issues/2666
+ref_null.wast https://github.com/WebAssembly/wabt/issues/1874
+table.wast https://github.com/WebAssembly/wabt/issues/2666
+type-canon.wast https://github.com/WebAssembly/wabt/issues/1874
+type-equivalence.wast https://github.com/WebAssembly/wabt/issues/1874
+type-rec.wast https://github.com/WebAssembly/wabt/issues/1874

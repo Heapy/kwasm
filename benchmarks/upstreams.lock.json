@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "capturedAtUtc": "2026-07-18T00:00:00Z",
+  "assetsVendored": false,
+  "sources": {
+    "sightglass": {
+      "repository": "https://github.com/bytecodealliance/sightglass.git",
+      "commit": "c18bbe75803a6a610f7ff3b15549c927c6e02667",
+      "purpose": "methodology and CoreMark workload provenance"
+    },
+    "coremark": {
+      "repository": "https://github.com/eembc/coremark.git",
+      "commit": "1f483d5b8316753a742cbf5590caf5bd0a4e4777",
+      "purpose": "upstream CoreMark source provenance"
+    },
+    "chasm": {
+      "repository": "https://github.com/CharlieTap/chasm.git",
+      "commit": "9e2e2fa50eef63c793473894633a00e5d58bcefe",
+      "purpose": "informational and NFR-1 interpreter comparison"
+    },
+    "chicory": {
+      "repository": "https://github.com/dylibso/chicory.git",
+      "commit": "e2e2e4058f49fbffeffc5ea92c54b41534cb45d3",
+      "purpose": "informational JVM interpreter/compiler comparison"
+    }
+  }
+}
