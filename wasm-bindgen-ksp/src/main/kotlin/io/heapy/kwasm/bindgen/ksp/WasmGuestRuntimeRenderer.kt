@@ -14,7 +14,6 @@ internal class WasmGuestRuntimeRenderer {
         @file:OptIn(
             io.heapy.kwasm.ExperimentalKwasmApi::class,
             kotlin.wasm.ExperimentalWasmInterop::class,
-            kotlin.wasm.unsafe.ComponentModelInternalApi::class,
             kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class,
         )
         @file:Suppress("RedundantVisibilityModifier")
@@ -29,8 +28,6 @@ internal class WasmGuestRuntimeRenderer {
         import kotlin.wasm.WasmExport
         import kotlin.wasm.WasmImport
         import kotlin.wasm.unsafe.Pointer
-        import kotlin.wasm.unsafe.componentModelRealloc
-        import kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory
         import kotlin.wasm.unsafe.withScopedMemoryAllocator
 
         @WasmImport(
@@ -123,12 +120,24 @@ internal class WasmGuestRuntimeRenderer {
         @WasmExport(WasmGuestRuntimeAbi.ALLOCATE_EXPORT)
         private fun kwasmBindgenAllocate(size: Int): Int {
             require(size > 0) { "kwasm guest allocation size must be positive" }
-            val pointer = componentModelRealloc(
-                originalPtr = 0,
-                originalSize = 0,
-                newSize = size,
-            )
-            check(pointer >= 0) { "kwasm guest allocator returned a negative pointer" }
+            val nextAddress = kwasmGuestAllocations.entries.maxOfOrNull {
+                val (pointer, allocatedSize) = it
+                check(pointer <= Int.MAX_VALUE - allocatedSize) {
+                    "kwasm guest allocation address overflow"
+                }
+                pointer + allocatedSize
+            } ?: 0
+            val pointer = withScopedMemoryAllocator { allocator ->
+                if (nextAddress > 0) {
+                    // Replay the live prefix so the returned region is
+                    // disjoint from every allocation still owned by the host.
+                    allocator.allocate(nextAddress)
+                }
+                allocator.allocate(size).address.toInt()
+            }
+            check(pointer >= nextAddress) {
+                "kwasm guest allocator returned overlapping pointer ${'$'}pointer"
+            }
             check(kwasmGuestAllocations.put(pointer, size) == null) {
                 "kwasm guest allocator reused live pointer ${'$'}pointer"
             }
@@ -141,9 +150,6 @@ internal class WasmGuestRuntimeRenderer {
                 ?: error("kwasm guest free references unknown pointer ${'$'}pointer")
             check(allocatedSize == size) {
                 "kwasm guest free size ${'$'}size does not match allocation ${'$'}allocatedSize"
-            }
-            if (kwasmGuestAllocations.isEmpty()) {
-                freeAllComponentModelReallocAllocatedMemory()
             }
         }
 
