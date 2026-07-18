@@ -2,9 +2,9 @@
 agp = "9.3.0-alpha01"
 benchmark = "0.4.17"
 coroutines = "1.10.2"
-kotlin = "2.4.0"
+kotlin = "2.4.10"
 kotlinx-io = "0.9.1"
-ksp = "2.3.9"
+ksp = "2.3.10"
 serialization = "1.11.0"
 
 [libraries]

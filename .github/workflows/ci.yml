@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   kotlin-wasm-compiler-compatibility:
-    name: Kotlin/Wasm compilers 2.4.0 and 2.3.21
+    name: Kotlin/Wasm compilers 2.4.10 and 2.3.21
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
