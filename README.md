@@ -351,7 +351,7 @@ a bounded, caller-scoped pending table and copied into guest memory exactly
 once. Linked `wasmJs` and `wasmWasi` binaries verify the compiler-facing
 contract, and the `wasmWasi` binary is decoded, validated, instantiated, and
 executed by kwasm in the JVM compatibility test. The compiler gate builds the
-same pinned corpus with Kotlin `2.4.0` and previous stable `2.3.21`, in both
+same pinned corpus with Kotlin `2.4.10` and previous stable `2.3.21`, in both
 legacy and standardized exception-handling modes. Every row exercises WASI
 hello-world/stdlib behavior, a JSON round-trip, exception-heavy control flow,
 and the generated bindgen boundary; see

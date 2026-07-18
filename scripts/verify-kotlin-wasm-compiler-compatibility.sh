@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-# Kotlin's official release history lists 2.4.0 as the current line and
+# Kotlin's official release history lists 2.4.10 as the current line and
 # 2.3.21 as the previous stable bug-fix release:
 # https://kotlinlang.org/docs/releases.html#release-history
-readonly CURRENT_KOTLIN_VERSION="2.4.0"
+readonly CURRENT_KOTLIN_VERSION="2.4.10"
 readonly PREVIOUS_KOTLIN_VERSION="2.3.21"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
