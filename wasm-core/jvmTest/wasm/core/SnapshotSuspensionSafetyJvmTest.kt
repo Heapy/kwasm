@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -56,6 +57,16 @@ class SnapshotSuspensionSafetyJvmTest {
                 instance.invoke("resume")
             }
             store.status.first { it == StoreStatus.InHostImport }
+            // InHostImport is published before the import's continuation
+            // parks. A capture probe only succeeds once the running segment
+            // has suspended and released the execution gate, so poll it to
+            // guarantee the completion below resumes a parked continuation
+            // on the resumer thread instead of finishing the await inline.
+            withTimeout(5_000) {
+                while (runCatching { store.captureSnapshotState(instance) }.isFailure) {
+                    delay(1)
+                }
+            }
             assertFalse(invocation.isCompleted)
 
             withContext(resumerDispatcher) {
