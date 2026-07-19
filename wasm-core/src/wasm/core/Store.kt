@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.ContinuationInterceptor
@@ -84,7 +85,18 @@ public data class StoreConfig(
     }
 }
 
-/** Coarse store state suitable for monitoring and snapshot coordination. */
+/**
+ * Coarse store state suitable for monitoring and snapshot coordination.
+ *
+ * Suspension statuses are published from inside the store's gated execution
+ * segments: [InHostImport], [Paused], and [WaitingForFuel] become externally
+ * observable before the executing continuation actually parks and releases
+ * the execution gate. A cross-thread observer that reacts to [Store.status]
+ * alone can therefore call [Store.captureSnapshotState] while the segment is
+ * still running and fail with "store execution has not parked". Await
+ * [Store.awaitSnapshotCapturable] instead when the observation is meant to
+ * precede a snapshot capture.
+ */
 @io.heapy.kwasm.ExperimentalKwasmApi
 public enum class StoreStatus {
     Idle,
@@ -958,6 +970,46 @@ public class Store(
         }
 
     /**
+     * Suspend until the store parks at a snapshot-capturable suspension point.
+     *
+     * Suspension statuses are published before the executing continuation
+     * parks and releases the execution gate, so reacting to [status] alone
+     * can race [captureSnapshotState] and fail with "store execution has not
+     * parked". This primitive returns only once a capturable status
+     * ([StoreStatus.Paused], [StoreStatus.WaitingForFuel], or
+     * [StoreStatus.InHostImport]) is published and the execution gate has
+     * been released.
+     *
+     * After this returns, a [captureSnapshotState] call cannot fail with
+     * "has not parked" unless the guest resumes in between. While the parked
+     * host import or pause is still outstanding the guest cannot resume, so
+     * awaiting this and then capturing is race-free; once the caller releases
+     * the guest (completing the import, [PauseHandle.resume], [addFuel]) the
+     * observed capturability is stale.
+     *
+     * Waits across [StoreStatus.Idle] and [StoreStatus.Running] for the next
+     * capturable suspension point; if none is ever reached this suspends
+     * until cancelled. Throws [SnapshotStateException] if the store is or
+     * becomes [StoreStatus.Poisoned] while waiting.
+     */
+    public suspend fun awaitSnapshotCapturable() {
+        while (true) {
+            val observed = statusState.first {
+                it == StoreStatus.Poisoned || it.acceptsSnapshotCapture
+            }
+            if (observed == StoreStatus.Poisoned) {
+                throw SnapshotStateException(
+                    "store is poisoned and will not park at a snapshot-capturable suspension point",
+                )
+            }
+            val parkedCapturable = executionGate.withParkedExecution {
+                statusState.value.acceptsSnapshotCapture
+            }
+            if (parkedCapturable) return
+        }
+    }
+
+    /**
      * Copy all state needed by the optional snapshot codec.
      *
      * The state is coherent only at one of the defined suspension points, so
@@ -973,6 +1025,12 @@ public class Store(
      * use this form because GC objects, host references, and registered host
      * participants may need to be traversed before a fully detached byte
      * representation exists.
+     *
+     * Capture requires the executing continuation to have parked, which
+     * happens strictly after the matching [StoreStatus] is published.
+     * Cross-thread callers coordinating through [status] must await
+     * [awaitSnapshotCapturable] first instead of capturing on the status
+     * observation alone.
      */
     public fun <T> captureSnapshotState(
         instance: Instance,
@@ -986,11 +1044,7 @@ public class Store(
         }
         try {
             val currentStatus = statusState.value
-            if (
-                currentStatus != StoreStatus.Paused &&
-                currentStatus != StoreStatus.WaitingForFuel &&
-                currentStatus != StoreStatus.InHostImport
-            ) {
+            if (!currentStatus.acceptsSnapshotCapture) {
                 throw SnapshotStateException(
                     "store status is $currentStatus; " +
                         "snapshot requires Paused, WaitingForFuel, or a parked host import",
@@ -1357,6 +1411,11 @@ public class Store(
     )
 }
 
+private val StoreStatus.acceptsSnapshotCapture: Boolean
+    get() = this == StoreStatus.Paused ||
+        this == StoreStatus.WaitingForFuel ||
+        this == StoreStatus.InHostImport
+
 /** Excludes snapshot traversal from synchronous interpreter segments. */
 private class StoreExecutionGate {
     private val mutex = Mutex()
@@ -1366,6 +1425,15 @@ private class StoreExecutionGate {
     fun releaseCapture() {
         mutex.unlock()
     }
+
+    /**
+     * Run [block] under the gate, suspending until the current continuation
+     * segment (if any) parks and releases it. On return the gate is free
+     * again, so a follow-up [tryAcquireCapture] succeeds unless a new segment
+     * resumed in between.
+     */
+    suspend fun <T> withParkedExecution(block: () -> T): T =
+        mutex.withLock { block() }
 
     fun <T> resumeSegment(
         continuation: Continuation<T>,
