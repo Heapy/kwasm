@@ -112,6 +112,10 @@ class SnapshotSuspensionSafetyJvmTest {
         try {
             val invocation = async(invocationDispatcher) { instance.invoke("wait") }
             store.status.first { it == StoreStatus.InHostImport }
+            // InHostImport is published before host code runs. Drain the
+            // single-thread dispatcher to prove that the host continuation
+            // has actually suspended and released the store execution gate.
+            withContext(invocationDispatcher) { Unit }
 
             val captureStarted = CountDownLatch(1)
             val finishCapture = CountDownLatch(1)
