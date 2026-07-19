@@ -57,6 +57,10 @@ jobs:
           :bindgen-ksp:classes
           :gradle-plugin:classes
           :tck:compileKotlinJvm
+          :annotations:compileKotlinJvm
+          :samples-cli:compileKotlin
+          :test-support-wat:compileKotlinJvm
+          :benchmarks:compileKotlinJvm
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
