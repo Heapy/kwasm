@@ -48,7 +48,7 @@ jobs:
 
       - name: Compile JVM Kotlin sources
         run: >-
-          ./gradlew --stacktrace --no-build-cache
+          ./gradlew --stacktrace --no-build-cache --rerun-tasks
           :core:compileKotlinJvm
           :snapshot:compileKotlinJvm
           :wasi:compileKotlinJvm
