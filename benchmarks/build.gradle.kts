@@ -248,6 +248,8 @@ benchmarkTargets.forEach { target ->
             providers.gradleProperty("kwasm.benchmark.maxRegressionPercent").orElse("10")
         val enforceSnapshotTarget =
             providers.gradleProperty("kwasm.benchmark.enforceSnapshotTarget").orElse("false")
+        val enforceCheckpointOverhead =
+            providers.gradleProperty("kwasm.benchmark.enforceCheckpointOverhead").orElse("true")
         val baselineFile =
             baselinePath.orNull
                 ?.takeIf(String::isNotBlank)
@@ -267,6 +269,7 @@ benchmarkTargets.forEach { target ->
         inputs.property("externalComparisonsPath", externalComparisonsPath.orElse(""))
         inputs.property("maxRegressionPercent", maxRegressionPercent)
         inputs.property("enforceSnapshotTarget", enforceSnapshotTarget)
+        inputs.property("enforceCheckpointOverhead", enforceCheckpointOverhead)
         baselineFile?.let(inputs::file)
         externalComparisonsFile?.let(inputs::file)
         outputs.file(gateReport)
@@ -290,6 +293,9 @@ benchmarkTargets.forEach { target ->
         }
         if (enforceSnapshotTarget.get().toBooleanStrict()) {
             arguments += "--enforce-snapshot-target"
+        }
+        if (!enforceCheckpointOverhead.get().toBooleanStrict()) {
+            arguments += "--advisory-checkpoint-overhead"
         }
         commandLine(arguments)
     }
