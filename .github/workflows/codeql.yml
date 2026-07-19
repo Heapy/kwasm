@@ -44,6 +44,7 @@ jobs:
           languages: java-kotlin
           build-mode: manual
           queries: security-extended
+          tools: nightly
 
       - name: Compile JVM Kotlin sources
         run: >-
