@@ -111,7 +111,10 @@ class SnapshotSuspensionSafetyJvmTest {
 
         try {
             val invocation = async(invocationDispatcher) { instance.invoke("wait") }
-            store.status.first { it == StoreStatus.InHostImport }
+            // InHostImport is published before the invocation continuation
+            // parks, so waiting on status alone would race the capture below.
+            store.awaitSnapshotCapturable()
+            assertEquals(StoreStatus.InHostImport, store.status.value)
 
             val captureStarted = CountDownLatch(1)
             val finishCapture = CountDownLatch(1)
@@ -139,6 +142,54 @@ class SnapshotSuspensionSafetyJvmTest {
             assertEquals(emptyList(), invocation.await())
             assertTrue(resumedHostCode.get())
             assertEquals(1, instance.memories.single().loadByte(0))
+        } finally {
+            invocationDispatcher.close()
+        }
+    }
+
+    @Test
+    fun awaitSnapshotCapturableEnablesCrossThreadCaptureOfAParkedHostImport(): Unit = runBlocking {
+        val type = FuncType(emptyList(), emptyList())
+        val module = validatedModule {
+            types += type
+            imports += Import("host", "wait", ImportDesc.Function(0))
+            exports += Export("wait", ExportDesc.Function(0))
+        }
+        val invocationDispatcher =
+            Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
+        try {
+            repeat(32) {
+                val releaseImport = CompletableDeferred<Unit>()
+                val store = Store()
+                val instance = Instance(
+                    store,
+                    module,
+                    ResolvedImports(
+                        functions = listOf(
+                            HostImport(type) {
+                                releaseImport.await()
+                                emptyList()
+                            },
+                        ),
+                    ),
+                )
+
+                val invocation = async(invocationDispatcher) { instance.invoke("wait") }
+                store.awaitSnapshotCapturable()
+                assertEquals(StoreStatus.InHostImport, store.status.value)
+
+                // The import is still blocked, so the guest cannot resume and
+                // a capture from another thread must succeed deterministically.
+                val snapshot = withContext(Dispatchers.Default) {
+                    store.captureSnapshotState(instance)
+                }
+                assertEquals(0, snapshot.pendingImport?.functionIndex)
+
+                releaseImport.complete(Unit)
+                assertEquals(emptyList(), invocation.await())
+                assertEquals(StoreStatus.Idle, store.status.value)
+            }
         } finally {
             invocationDispatcher.close()
         }
