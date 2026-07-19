@@ -354,6 +354,43 @@ class GcEhExecutionTest {
         assertEquals(hostFailure, escaped)
     }
 
+    @Test
+    fun tryTableCatchAllCannotCatchHostExceptions(): Unit = runBlocking {
+        val hostFailure = IllegalStateException("host bug")
+        val module = validatedModule {
+            types += FuncType(emptyList(), emptyList())
+            imports += Import("host", "fail", ImportDesc.Function(0))
+            functions += Function(
+                0,
+                emptyList(),
+                listOf(
+                    TryTable(
+                        blockType = BlockType.Empty,
+                        catches = listOf(CatchClause.All(depth = 0, withReference = false)),
+                        body = listOf(Call(0)),
+                    ),
+                ),
+            )
+            exports += Export("run", ExportDesc.Function(1))
+        }
+        val instance = Instance(
+            Store(),
+            module,
+            ResolvedImports(
+                functions = listOf(
+                    HostImport(FuncType(emptyList(), emptyList())) {
+                        throw hostFailure
+                    },
+                ),
+            ),
+        )
+
+        val escaped = assertFailsWith<IllegalStateException> {
+            instance.invoke("run")
+        }
+        assertEquals(hostFailure, escaped)
+    }
+
     private fun exceptionModule(body: (Int) -> Instr): Module = validatedModule {
         types += FuncType(listOf(ValType.I32), emptyList())
         types += FuncType(emptyList(), listOf(ValType.I32))

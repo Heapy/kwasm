@@ -4,7 +4,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -55,7 +54,12 @@ class SnapshotSuspensionSafetyJvmTest {
             val invocation = async(Dispatchers.Unconfined) {
                 instance.invoke("resume")
             }
-            store.status.first { it == StoreStatus.InHostImport }
+            // InHostImport is published before the import's continuation
+            // parks, so await the execution gate to guarantee the completion
+            // below resumes a parked continuation on the resumer thread
+            // instead of finishing the await inline.
+            store.awaitSnapshotCapturable()
+            assertEquals(StoreStatus.InHostImport, store.status.value)
             assertFalse(invocation.isCompleted)
 
             withContext(resumerDispatcher) {
