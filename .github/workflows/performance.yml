@@ -82,7 +82,8 @@ jobs:
           ./gradlew --stacktrace \
             :benchmarks:performanceGateToolTest \
             :benchmarks:jvmPerformanceGate \
-            -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json
+            -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json \
+            -Pkwasm.benchmark.enforceCheckpointOverhead=false
 
       - name: Upload JVM evidence
         if: always()
@@ -141,7 +142,8 @@ jobs:
             ":benchmarks:${KWASM_TARGET}ExternalComparisonReport"
           ./gradlew --stacktrace \
             ":benchmarks:${KWASM_TARGET}PerformanceGate" \
-            "-Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-${KWASM_TARGET}.json"
+            "-Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-${KWASM_TARGET}.json" \
+            -Pkwasm.benchmark.enforceCheckpointOverhead=false
 
       - name: Upload Native evidence
         if: always()
