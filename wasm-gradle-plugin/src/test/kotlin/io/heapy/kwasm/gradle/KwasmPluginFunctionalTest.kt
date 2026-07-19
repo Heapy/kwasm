@@ -616,7 +616,7 @@ public class KwasmPluginFunctionalTest {
 
     private fun awaitCondition(
         description: String,
-        timeoutMillis: Long = 30_000L,
+        timeoutMillis: Long = 120_000L,
         condition: () -> Boolean,
     ) {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)

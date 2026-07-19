@@ -283,7 +283,7 @@ def _find_suffix(scores: dict[str, float], suffix: str) -> tuple[str, float]:
     return matches[0]
 
 
-def _checkpoint_gate(scores: dict[str, float]) -> dict[str, Any]:
+def _checkpoint_gate(scores: dict[str, float], enforced: bool) -> dict[str, Any]:
     rows = []
     ratios = []
     for workload, enabled_suffix, compiled_out_suffix in CHECKPOINT_PAIRS:
@@ -303,10 +303,19 @@ def _checkpoint_gate(scores: dict[str, float]) -> dict[str, Any]:
             },
         )
     geomean = math.exp(sum(math.log(ratio) for ratio in ratios) / len(ratios))
+    passed = geomean <= CHECKPOINT_LIMIT
     return {
         "requirement": "SUSP-5",
-        "status": "pass" if geomean <= CHECKPOINT_LIMIT else "fail",
+        "status": "pass" if (not enforced or passed) else "fail",
+        "enforced": enforced,
+        "reason": (
+            None
+            if enforced
+            else "checkpoint overhead is advisory on this run; "
+            "the 5% geomean budget needs a quiet dedicated machine"
+        ),
         "limitRatio": CHECKPOINT_LIMIT,
+        "limitMet": passed,
         "geomeanRatio": geomean,
         "geomeanOverheadPercent": (geomean - 1.0) * 100.0,
         "pairs": rows,
@@ -561,6 +570,7 @@ def verify_report(
     external_comparisons: Any | None,
     max_regression_percent: float,
     enforce_snapshot_target: bool,
+    enforce_checkpoint_overhead: bool = True,
 ) -> tuple[dict[str, Any], bool]:
     current = _validate_normalized(current, "current report")
     baseline = (
@@ -575,7 +585,7 @@ def verify_report(
         _find_suffix(scores, suffix)
 
     gates = [
-        _checkpoint_gate(scores),
+        _checkpoint_gate(scores, enforce_checkpoint_overhead),
         _startup_gate(scores, str(current.get("target"))),
         _snapshot_gate(scores, enforce_snapshot_target),
         _history_gate(current, baseline, max_regression_percent),
@@ -625,6 +635,7 @@ def _verify_command(arguments: argparse.Namespace) -> int:
         external_comparisons=comparisons,
         max_regression_percent=arguments.max_regression_percent,
         enforce_snapshot_target=arguments.enforce_snapshot_target,
+        enforce_checkpoint_overhead=arguments.enforce_checkpoint_overhead,
     )
     _write_json(arguments.output, result)
     for gate in result["gates"]:
@@ -688,7 +699,12 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--output", type=pathlib.Path, required=True)
     verify.add_argument("--max-regression-percent", type=float, default=10.0)
     verify.add_argument("--enforce-snapshot-target", action="store_true")
-    verify.set_defaults(handler=_verify_command)
+    verify.add_argument(
+        "--advisory-checkpoint-overhead",
+        dest="enforce_checkpoint_overhead",
+        action="store_false",
+    )
+    verify.set_defaults(handler=_verify_command, enforce_checkpoint_overhead=True)
     return parser
 
 
