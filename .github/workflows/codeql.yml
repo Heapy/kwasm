@@ -44,10 +44,11 @@ jobs:
           languages: java-kotlin
           build-mode: manual
           queries: security-extended
+          tools: nightly
 
       - name: Compile JVM Kotlin sources
         run: >-
-          ./gradlew --stacktrace
+          ./gradlew --stacktrace --no-build-cache
           :core:compileKotlinJvm
           :snapshot:compileKotlinJvm
           :wasi:compileKotlinJvm

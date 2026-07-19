@@ -67,15 +67,6 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Restore JVM self-history
-        id: history
-        uses: actions/cache/restore@v6
-        with:
-          path: benchmarks/.performance-history/jvm.json
-          key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            kwasm-performance-jvm-${{ runner.os }}-
-
       - name: Prepare pinned Chasm and CoreMark fixture
         shell: bash
         run: |
@@ -86,35 +77,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gate_args=()
-          if [[ -s benchmarks/.performance-history/jvm.json ]]; then
-            gate_args+=(
-              "-Pkwasm.benchmark.baseline=benchmarks/.performance-history/jvm.json"
-            )
-          fi
           ./gradlew --stacktrace \
             :benchmarks:jvmExternalComparisonReport
           ./gradlew --stacktrace \
             :benchmarks:performanceGateToolTest \
             :benchmarks:jvmPerformanceGate \
-            -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json \
-            "${gate_args[@]}"
-
-      - name: Stage successful JVM history
-        if: success() && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          mkdir -p benchmarks/.performance-history
-          cp \
-            benchmarks/build/performance/current-jvm.json \
-            benchmarks/.performance-history/jvm.json
-
-      - name: Save successful JVM history
-        if: success() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v6
-        with:
-          path: benchmarks/.performance-history/jvm.json
-          key: kwasm-performance-jvm-${{ runner.os }}-${{ github.run_id }}
+            -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json
 
       - name: Upload JVM evidence
         if: always()
@@ -157,14 +125,6 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Restore Native self-history
-        uses: actions/cache/restore@v6
-        with:
-          path: benchmarks/.performance-history/${{ matrix.target }}.json
-          key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            kwasm-performance-${{ matrix.target }}-${{ runner.os }}-
-
       - name: Prepare pinned Chasm and CoreMark fixture
         shell: bash
         run: |
@@ -177,35 +137,11 @@ jobs:
           KWASM_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          gate_args=()
-          history="benchmarks/.performance-history/${KWASM_TARGET}.json"
-          if [[ -s "$history" ]]; then
-            gate_args+=("-Pkwasm.benchmark.baseline=$history")
-          fi
           ./gradlew --stacktrace \
             ":benchmarks:${KWASM_TARGET}ExternalComparisonReport"
           ./gradlew --stacktrace \
             ":benchmarks:${KWASM_TARGET}PerformanceGate" \
-            "-Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-${KWASM_TARGET}.json" \
-            "${gate_args[@]}"
-
-      - name: Stage successful Native history
-        if: success() && github.ref == 'refs/heads/main'
-        shell: bash
-        env:
-          KWASM_TARGET: ${{ matrix.target }}
-        run: |
-          mkdir -p benchmarks/.performance-history
-          cp \
-            "benchmarks/build/performance/current-${KWASM_TARGET}.json" \
-            "benchmarks/.performance-history/${KWASM_TARGET}.json"
-
-      - name: Save successful Native history
-        if: success() && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v6
-        with:
-          path: benchmarks/.performance-history/${{ matrix.target }}.json
-          key: kwasm-performance-${{ matrix.target }}-${{ runner.os }}-${{ github.run_id }}
+            "-Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-${KWASM_TARGET}.json"
 
       - name: Upload Native evidence
         if: always()
