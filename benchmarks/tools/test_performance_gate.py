@@ -119,6 +119,23 @@ class PerformanceGateTest(unittest.TestCase):
         self.assertEqual("fail", checkpoint["status"])
         self.assertAlmostEqual(1.051, checkpoint["geomeanRatio"])
 
+    def test_checkpoint_overhead_can_run_as_advisory(self):
+        result, failed = performance_gate.verify_report(
+            normalized(enabled_ratio=1.051),
+            baseline=None,
+            external_comparisons=None,
+            max_regression_percent=10.0,
+            enforce_snapshot_target=False,
+            enforce_checkpoint_overhead=False,
+        )
+
+        checkpoint = result["gates"][0]
+        self.assertFalse(failed)
+        self.assertEqual("pass", checkpoint["status"])
+        self.assertFalse(checkpoint["enforced"])
+        self.assertFalse(checkpoint["limitMet"])
+        self.assertAlmostEqual(1.051, checkpoint["geomeanRatio"])
+
     def test_snapshot_target_is_advisory_unless_requested(self):
         advisory, advisory_failed = performance_gate.verify_report(
             normalized(),
