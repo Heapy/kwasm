@@ -678,6 +678,13 @@ internal class Wasm3DifferentialEngine(
 
 internal object Wasm3OutputParser {
     private val version = Regex("""^\s*wasm3\s+v?([0-9]+\.[0-9]+\.[0-9]+)(?:\s.*)?$""", RegexOption.IGNORE_CASE)
+    // The differential gate validates each generated module with pinned
+    // wasmtime first. These diagnostics therefore identify wasm3 capability
+    // gaps, not malformed corpus entries or kwasm divergences.
+    private val unsupportedFeatures = listOf(
+        "element table index must be zero for mvp" to
+            "wasm3-unsupported-non-mvp-element-table",
+    )
 
     fun parseVersion(output: CapturedProcessOutput): String {
         requireInfrastructureCompletion(output, "wasm3 --version")
@@ -742,6 +749,8 @@ internal object Wasm3OutputParser {
         }
 
         val diagnostic = (output.stderr + "\n" + output.stdout).lowercase()
+        unsupportedFeatures.firstOrNull { (message) -> message in diagnostic }
+            ?.let { (_, reason) -> return DifferentialResult.Abstained(reason) }
         canonicalWasm3Trap(diagnostic)?.let { return DifferentialResult.Trapped(it) }
         val phase =
             when {

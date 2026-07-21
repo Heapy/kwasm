@@ -248,6 +248,22 @@ class NightlyFuzzTest {
     }
 
     @Test
+    fun wasm3AbstainsWhenModuleNeedsNonMvpElementTable() {
+        assertEquals(
+            DifferentialResult.Abstained("wasm3-unsupported-non-mvp-element-table"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3(
+                    """
+                    Error: [Fatal] repl_load: element table index must be zero for MVP
+                    Error: element table index must be zero for MVP
+                    """.trimIndent(),
+                ),
+                listOf("i32"),
+            ),
+        )
+    }
+
+    @Test
     fun normalizesWasm3TrapsViaCanonicalWasm3TrapTable() {
         // `[trap] unreachable executed` lacks the `wasm trap` substring that
         // the wasmtime-oriented canonicalTrap overload requires, so it must go
