@@ -38,6 +38,7 @@ import kotlinx.coroutines.withTimeout
 
 private const val DEFAULT_RAW_SEED: ULong = 0x4B5741534DUL
 private const val DEFAULT_SNAPSHOT_SEED: ULong = 0x534E415053484F54UL
+private val wasm3ReportedVersion = Regex("""[0-9]+\.[0-9]+\.[0-9]+""")
 
 /**
  * Dedicated JVM entry point for the scheduled robustness gate.
@@ -151,6 +152,16 @@ internal data class NightlyFuzzConfiguration(
         }
         require(wasm3SecondaryExecutable == null || !expectedWasm3SecondaryVersion.isNullOrBlank()) {
             "--wasm3-secondary requires --expected-wasm3-secondary-version"
+        }
+        expectedWasm3Version?.let { version ->
+            require(wasm3ReportedVersion.matches(version)) {
+                "--expected-wasm3-version must be the x.y.z version reported by wasm3 --version"
+            }
+        }
+        expectedWasm3SecondaryVersion?.let { version ->
+            require(wasm3ReportedVersion.matches(version)) {
+                "--expected-wasm3-secondary-version must be the x.y.z version reported by wasm3 --version"
+            }
         }
         require(!requireDifferential || corpusDirectory != null) {
             "--require-differential requires --corpus"

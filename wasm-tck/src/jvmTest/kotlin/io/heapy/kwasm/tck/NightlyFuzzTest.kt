@@ -32,7 +32,7 @@ class NightlyFuzzTest {
                 "--wasm3", "/tools/wasm3-stable/wasm3",
                 "--expected-wasm3-version", "0.5.0",
                 "--wasm3-secondary", "/tools/wasm3-main/wasm3",
-                "--expected-wasm3-secondary-version", "d77cd814",
+                "--expected-wasm3-secondary-version", "0.5.2",
                 "--artifacts", "evidence",
                 "--max-modules", "23",
                 "--max-invocations-per-module", "2",
@@ -59,7 +59,7 @@ class NightlyFuzzTest {
         assertEquals("/tools/wasm3-stable/wasm3", configured.wasm3Executable)
         assertEquals("0.5.0", configured.expectedWasm3Version)
         assertEquals("/tools/wasm3-main/wasm3", configured.wasm3SecondaryExecutable)
-        assertEquals("d77cd814", configured.expectedWasm3SecondaryVersion)
+        assertEquals("0.5.2", configured.expectedWasm3SecondaryVersion)
         assertEquals(Path.of("evidence"), configured.artifactDirectory)
         assertEquals(23, configured.maximumModules)
         assertEquals(2, configured.maximumInvocationsPerModule)
@@ -90,6 +90,21 @@ class NightlyFuzzTest {
                 listOf(
                     "--wasm3-secondary", "/tools/wasm3-main/wasm3",
                     "--expected-wasm3-secondary-version", "abc123",
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun rejectsSourceRevisionAsWasm3ReportedVersion() {
+        assertFailsWith<IllegalArgumentException> {
+            NightlyFuzzConfiguration.parse(
+                listOf(
+                    "--wasm3", "/tools/wasm3-stable/wasm3",
+                    "--expected-wasm3-version", "0.5.0",
+                    "--wasm3-secondary", "/tools/wasm3-main/wasm3",
+                    "--expected-wasm3-secondary-version",
+                    "d77cd814aa0bc68cb1df917580a6304d34cfb30b",
                 ),
             )
         }
