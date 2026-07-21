@@ -47,7 +47,10 @@ env:
   WASM3_STABLE_VERSION: 0.5.0
   WASM3_STABLE_REF: v0.5.0
   WASM3_STABLE_SHA256: b778dd72ee2251f4fe9e2666ee3fe1c26f06f517c3ffce572416db067546536c
+  # The source revision and the version printed by `wasm3 --version` are
+  # independent identities; both are pinned and verified below.
   WASM3_MAIN_REF: d77cd814aa0bc68cb1df917580a6304d34cfb30b
+  WASM3_MAIN_VERSION: 0.5.2
   WASM3_MAIN_SHA256: c053196f4076b0649ead668c37f55673350aa2b6437afcf5c2acf43248dbf3c8
   RAW_SEED: "0x4B5741534D"
   SNAPSHOT_SEED: "0x534E415053484F54"
@@ -192,7 +195,7 @@ jobs:
             echo "wasm-tools $WASM_TOOLS_VERSION"
             echo "wasmtime $WASMTIME_VERSION"
             echo "wasm3-stable $WASM3_STABLE_VERSION (ref $WASM3_STABLE_REF, source SHA-256 pinned)"
-            echo "wasm3-main $WASM3_MAIN_REF (source SHA-256 pinned)"
+            echo "wasm3-main $WASM3_MAIN_VERSION (ref $WASM3_MAIN_REF, source SHA-256 pinned)"
             echo "smith-seed $SMITH_SEED"
             echo "smith-modules $SMITH_MODULES"
             echo "raw-seed $RAW_SEED"
@@ -232,7 +235,7 @@ jobs:
             -Pkwasm.fuzz.wasm3="$GITHUB_WORKSPACE/.tools/wasm3-stable/wasm3" \
             -Pkwasm.fuzz.wasm3Version="$WASM3_STABLE_VERSION" \
             -Pkwasm.fuzz.wasm3Secondary="$GITHUB_WORKSPACE/.tools/wasm3-main/wasm3" \
-            -Pkwasm.fuzz.wasm3SecondaryVersion="$WASM3_MAIN_REF" \
+            -Pkwasm.fuzz.wasm3SecondaryVersion="$WASM3_MAIN_VERSION" \
             -Pkwasm.fuzz.artifactsDir="$GITHUB_WORKSPACE/artifacts/fuzz-evidence" \
             -Pkwasm.fuzz.maxModules="$SMITH_MODULES" \
             -Pkwasm.fuzz.maxInvocationsPerModule=4 \
@@ -255,7 +258,7 @@ jobs:
             echo "- wasm-tools: \`$WASM_TOOLS_VERSION\` (archive SHA-256 pinned)"
             echo "- wasmtime: \`$WASMTIME_VERSION\` (archive SHA-256 pinned)"
             echo "- wasm3 stable: \`$WASM3_STABLE_VERSION\` (built from source \`$WASM3_STABLE_REF\`, source SHA-256 pinned)"
-            echo "- wasm3 main: \`$WASM3_MAIN_REF\` (built from source, source SHA-256 pinned)"
+            echo "- wasm3 main: \`$WASM3_MAIN_VERSION\` (built from \`$WASM3_MAIN_REF\`, source SHA-256 pinned)"
             echo "- Raw decoder: \`$RAW_ITERATIONS\` cases from seed \`$RAW_SEED\`"
             echo "- Snapshot mutations: \`$SNAPSHOT_MUTATIONS\` from seed \`$SNAPSHOT_SEED\`"
             echo "- Snapshot continuation properties: \`$SNAPSHOT_PROPERTIES\`"

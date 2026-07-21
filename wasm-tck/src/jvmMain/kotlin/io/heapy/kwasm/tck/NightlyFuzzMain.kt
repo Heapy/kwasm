@@ -38,6 +38,7 @@ import kotlinx.coroutines.withTimeout
 
 private const val DEFAULT_RAW_SEED: ULong = 0x4B5741534DUL
 private const val DEFAULT_SNAPSHOT_SEED: ULong = 0x534E415053484F54UL
+private val wasm3ReportedVersion = Regex("""[0-9]+\.[0-9]+\.[0-9]+""")
 
 /**
  * Dedicated JVM entry point for the scheduled robustness gate.
@@ -151,6 +152,16 @@ internal data class NightlyFuzzConfiguration(
         }
         require(wasm3SecondaryExecutable == null || !expectedWasm3SecondaryVersion.isNullOrBlank()) {
             "--wasm3-secondary requires --expected-wasm3-secondary-version"
+        }
+        expectedWasm3Version?.let { version ->
+            require(wasm3ReportedVersion.matches(version)) {
+                "--expected-wasm3-version must be the x.y.z version reported by wasm3 --version"
+            }
+        }
+        expectedWasm3SecondaryVersion?.let { version ->
+            require(wasm3ReportedVersion.matches(version)) {
+                "--expected-wasm3-secondary-version must be the x.y.z version reported by wasm3 --version"
+            }
         }
         require(!requireDifferential || corpusDirectory != null) {
             "--require-differential requires --corpus"
@@ -667,6 +678,14 @@ internal class Wasm3DifferentialEngine(
 
 internal object Wasm3OutputParser {
     private val version = Regex("""^\s*wasm3\s+v?([0-9]+\.[0-9]+\.[0-9]+)(?:\s.*)?$""", RegexOption.IGNORE_CASE)
+    // The differential gate validates each generated module with pinned
+    // wasmtime first. These diagnostics therefore identify wasm3 capability
+    // gaps, not malformed corpus entries or kwasm divergences.
+    private val unsupportedFeatures = listOf(
+        "element table index must be zero for mvp" to
+            "wasm3-unsupported-non-mvp-element-table",
+        "restricted opcode" to "wasm3-unsupported-restricted-opcode",
+    )
 
     fun parseVersion(output: CapturedProcessOutput): String {
         requireInfrastructureCompletion(output, "wasm3 --version")
@@ -731,6 +750,8 @@ internal object Wasm3OutputParser {
         }
 
         val diagnostic = (output.stderr + "\n" + output.stdout).lowercase()
+        unsupportedFeatures.firstOrNull { (message) -> message in diagnostic }
+            ?.let { (_, reason) -> return DifferentialResult.Abstained(reason) }
         canonicalWasm3Trap(diagnostic)?.let { return DifferentialResult.Trapped(it) }
         val phase =
             when {

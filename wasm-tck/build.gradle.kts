@@ -758,70 +758,68 @@ val nightlyFuzz = tasks.register<JavaExec>("nightlyFuzz") {
     // match a prior local run; evidence is a result, not a reusable build cache.
     outputs.upToDateWhen { false }
 
-    doFirst {
-        val configuredArguments = buildList {
-            addAll(listOf("--raw-seed", fuzzRawSeed.get()))
-            addAll(listOf("--raw-iterations", fuzzRawIterations.get()))
-            addAll(listOf("--raw-max-bytes", fuzzRawMaximumBytes.get()))
-            addAll(listOf("--snapshot-seed", fuzzSnapshotSeed.get()))
-            addAll(
-                listOf(
-                    "--snapshot-mutation-iterations",
-                    fuzzSnapshotMutationIterations.get(),
-                ),
-            )
-            addAll(
-                listOf(
-                    "--snapshot-property-iterations",
-                    fuzzSnapshotPropertyIterations.get(),
-                ),
-            )
-            addAll(listOf("--wasmtime", fuzzWasmtime.get()))
-            addAll(listOf("--artifacts", fuzzArtifacts.get().absolutePath))
-            addAll(listOf("--max-modules", fuzzMaximumModules.get()))
-            addAll(
-                listOf(
-                    "--max-invocations-per-module",
-                    fuzzMaximumInvocations.get(),
-                ),
-            )
-            addAll(listOf("--max-module-bytes", fuzzMaximumModuleBytes.get()))
-            addAll(listOf("--process-timeout-ms", fuzzProcessTimeout.get()))
-            addAll(listOf("--execution-fuel", fuzzExecutionFuel.get()))
-            addAll(
-                listOf(
-                    "--max-runtime-memory-bytes",
-                    fuzzMaximumRuntimeMemory.get(),
-                ),
-            )
-            addAll(listOf("--max-table-elements", fuzzMaximumTableElements.get()))
-            addAll(listOf("--minimization-attempts", fuzzMinimizationAttempts.get()))
-            fuzzCorpus.orNull?.let { corpusPath ->
-                addAll(listOf("--corpus", rootProject.file(corpusPath).absolutePath))
-            }
-            fuzzWasmtimeVersion.orNull?.let { version ->
-                addAll(listOf("--expected-wasmtime-version", version))
-            }
-            // wasm3 is an optional oracle; emit its flags only when configured.
-            fuzzWasm3.orNull?.let { executable ->
-                addAll(listOf("--wasm3", executable))
-                fuzzWasm3Version.orNull?.let { version ->
-                    addAll(listOf("--expected-wasm3-version", version))
-                }
-            }
-            fuzzWasm3Secondary.orNull?.let { executable ->
-                addAll(listOf("--wasm3-secondary", executable))
-                fuzzWasm3SecondaryVersion.orNull?.let { version ->
-                    addAll(listOf("--expected-wasm3-secondary-version", version))
-                }
-            }
-            if (fuzzRequireDifferential.get().toBooleanStrict()) {
-                add("--require-differential")
-            }
-            if (fuzzAllowNoCallableExports.get().toBooleanStrict()) {
-                add("--allow-no-callable-exports")
+    val configuredArguments = buildList {
+        addAll(listOf("--raw-seed", fuzzRawSeed.get()))
+        addAll(listOf("--raw-iterations", fuzzRawIterations.get()))
+        addAll(listOf("--raw-max-bytes", fuzzRawMaximumBytes.get()))
+        addAll(listOf("--snapshot-seed", fuzzSnapshotSeed.get()))
+        addAll(
+            listOf(
+                "--snapshot-mutation-iterations",
+                fuzzSnapshotMutationIterations.get(),
+            ),
+        )
+        addAll(
+            listOf(
+                "--snapshot-property-iterations",
+                fuzzSnapshotPropertyIterations.get(),
+            ),
+        )
+        addAll(listOf("--wasmtime", fuzzWasmtime.get()))
+        addAll(listOf("--artifacts", fuzzArtifacts.get().absolutePath))
+        addAll(listOf("--max-modules", fuzzMaximumModules.get()))
+        addAll(
+            listOf(
+                "--max-invocations-per-module",
+                fuzzMaximumInvocations.get(),
+            ),
+        )
+        addAll(listOf("--max-module-bytes", fuzzMaximumModuleBytes.get()))
+        addAll(listOf("--process-timeout-ms", fuzzProcessTimeout.get()))
+        addAll(listOf("--execution-fuel", fuzzExecutionFuel.get()))
+        addAll(
+            listOf(
+                "--max-runtime-memory-bytes",
+                fuzzMaximumRuntimeMemory.get(),
+            ),
+        )
+        addAll(listOf("--max-table-elements", fuzzMaximumTableElements.get()))
+        addAll(listOf("--minimization-attempts", fuzzMinimizationAttempts.get()))
+        fuzzCorpus.orNull?.let { corpusPath ->
+            addAll(listOf("--corpus", rootProject.file(corpusPath).absolutePath))
+        }
+        fuzzWasmtimeVersion.orNull?.let { version ->
+            addAll(listOf("--expected-wasmtime-version", version))
+        }
+        // wasm3 is an optional oracle; emit its flags only when configured.
+        fuzzWasm3.orNull?.let { executable ->
+            addAll(listOf("--wasm3", executable))
+            fuzzWasm3Version.orNull?.let { version ->
+                addAll(listOf("--expected-wasm3-version", version))
             }
         }
-        setArgs(configuredArguments)
+        fuzzWasm3Secondary.orNull?.let { executable ->
+            addAll(listOf("--wasm3-secondary", executable))
+            fuzzWasm3SecondaryVersion.orNull?.let { version ->
+                addAll(listOf("--expected-wasm3-secondary-version", version))
+            }
+        }
+        if (fuzzRequireDifferential.get().toBooleanStrict()) {
+            add("--require-differential")
+        }
+        if (fuzzAllowNoCallableExports.get().toBooleanStrict()) {
+            add("--allow-no-callable-exports")
+        }
     }
+    setArgs(configuredArguments)
 }
