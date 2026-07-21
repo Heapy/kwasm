@@ -264,6 +264,22 @@ class NightlyFuzzTest {
     }
 
     @Test
+    fun wasm3AbstainsWhenModuleContainsRestrictedOpcode() {
+        assertEquals(
+            DifferentialResult.Abstained("wasm3-unsupported-restricted-opcode"),
+            Wasm3OutputParser.parseInvocation(
+                failedWasm3(
+                    """
+                    Error: [Fatal] repl_load: restricted opcode
+                    Error: restricted opcode
+                    """.trimIndent(),
+                ),
+                listOf("i64"),
+            ),
+        )
+    }
+
+    @Test
     fun normalizesWasm3TrapsViaCanonicalWasm3TrapTable() {
         // `[trap] unreachable executed` lacks the `wasm trap` substring that
         // the wasmtime-oriented canonicalTrap overload requires, so it must go

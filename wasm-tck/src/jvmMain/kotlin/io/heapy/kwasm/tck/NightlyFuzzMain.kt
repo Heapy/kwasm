@@ -684,6 +684,7 @@ internal object Wasm3OutputParser {
     private val unsupportedFeatures = listOf(
         "element table index must be zero for mvp" to
             "wasm3-unsupported-non-mvp-element-table",
+        "restricted opcode" to "wasm3-unsupported-restricted-opcode",
     )
 
     fun parseVersion(output: CapturedProcessOutput): String {
