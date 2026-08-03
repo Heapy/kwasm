@@ -33,7 +33,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Link paired final binaries and enforce NFR-2
         run: bash scripts/verify-ios-core-footprint.sh
@@ -65,7 +65,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Prepare pinned Chasm and CoreMark fixture
         shell: bash
@@ -124,7 +124,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Prepare pinned Chasm and CoreMark fixture
         shell: bash
@@ -177,7 +177,7 @@ jobs:
           native-image-job-reports: "true"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Build application distribution
         run: ./gradlew --stacktrace :samples-cli:installDist
