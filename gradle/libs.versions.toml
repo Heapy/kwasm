@@ -5,7 +5,7 @@ chasm = "1.4.8"
 coroutines = "1.10.2"
 kotlin = "2.4.10"
 kotlinx-io = "0.9.1"
-ksp = "2.3.10"
+ksp = "2.3.11"
 serialization = "1.11.0"
 
 [libraries]
