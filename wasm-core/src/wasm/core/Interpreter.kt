@@ -319,10 +319,13 @@ public class Interpreter : ResumableMachine {
         val canonicalizeNaNs = store.config.canonicalizeNaNs
         val body = control.body
         val linearHotCode = control.linearHotCode
+        val packedInstructions = linearHotCode.packedInstructions
         while (control.pc < body.size) {
             val pc = control.pc
-            val packedInstruction = linearHotCode.packedInstructions[pc]
-            val opcode = packedInstruction.toInt()
+            val instruction = if (packedInstructions == null) body[pc] else null
+            val packedInstruction =
+                if (packedInstructions == null) 0L else packedInstructions[pc]
+            val opcode = instruction?.opcode ?: packedInstruction.toInt()
             if (
                 opcode !in 0x20..0x26 &&
                 opcode !in 0x28..0xC4 &&
@@ -366,8 +369,7 @@ public class Interpreter : ResumableMachine {
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
-                val instruction = body[pc]
-                executeNonSuspendingHotInstruction(store, frame, instruction)
+                executeNonSuspendingHotInstruction(store, frame, instruction ?: body[pc])
                 if (
                     store.frames.lastOrNull() !== frame ||
                     frame.controls.lastOrNull() !== control
@@ -379,7 +381,8 @@ public class Interpreter : ResumableMachine {
                     store,
                     frame,
                     opcode,
-                    (packedInstruction shr 32).toInt(),
+                    instruction?.linearHotImmediate()
+                        ?: (packedInstruction shr 32).toInt(),
                     body,
                     pc,
                 )
@@ -403,11 +406,14 @@ public class Interpreter : ResumableMachine {
         val canonicalizeNaNs = store.config.canonicalizeNaNs
         val body = control.body
         val linearHotCode = control.linearHotCode
+        val packedInstructions = linearHotCode.packedInstructions
         var checkpointCompleted = checkpointCompletedForFirstInstruction
         while (control.pc < body.size) {
             val pc = control.pc
-            val packedInstruction = linearHotCode.packedInstructions[pc]
-            val opcode = packedInstruction.toInt()
+            val instruction = if (packedInstructions == null) body[pc] else null
+            val packedInstruction =
+                if (packedInstructions == null) 0L else packedInstructions[pc]
+            val opcode = instruction?.opcode ?: packedInstruction.toInt()
             if (
                 opcode !in 0x20..0x26 &&
                 opcode !in 0x28..0xC4 &&
@@ -466,8 +472,8 @@ public class Interpreter : ResumableMachine {
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
-                val instruction = body[pc]
-                val result = executeNonSuspendingHotInstruction(store, frame, instruction)
+                val result =
+                    executeNonSuspendingHotInstruction(store, frame, instruction ?: body[pc])
                 if (result == FastInstructionResult.RequiresSlowCheckpoint) {
                     return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
                 }
@@ -482,7 +488,8 @@ public class Interpreter : ResumableMachine {
                     store,
                     frame,
                     opcode,
-                    (packedInstruction shr 32).toInt(),
+                    instruction?.linearHotImmediate()
+                        ?: (packedInstruction shr 32).toInt(),
                     body,
                     pc,
                 )
@@ -973,6 +980,12 @@ public class Interpreter : ResumableMachine {
             }
             else -> executeNonSuspendingHotInstruction(store, frame, body[pc])
         }
+    }
+
+    private fun Instr.linearHotImmediate(): Int = when (this) {
+        is FcIndex -> index
+        is I32Const -> value
+        else -> 0
     }
 
     /**

@@ -279,6 +279,13 @@ public class Store(
     private val reusableFrames: ArrayDeque<GuestCallFrame> = ArrayDeque()
     private val reusableControls: ArrayDeque<GuestControlFrame> = ArrayDeque()
     private val linearHotCodes: MutableList<Pair<List<Instr>, LinearHotCode>> = mutableListOf()
+    private val packedLinearCodeBudget =
+        PackedLinearCodeBudget(
+            maxInstructions = MAX_PACKED_LINEAR_INSTRUCTIONS_PER_STORE,
+            maxBodies = MAX_PACKED_LINEAR_BODIES_PER_STORE,
+        )
+    private var lastLinearHotBody: List<Instr>? = null
+    private var lastLinearHotCode: LinearHotCode = EMPTY_LINEAR_HOT_CODE
     internal var instructionsUntilCheckpoint: Int = config.checkpointInterval
     internal fun executionContext(callerContext: CoroutineContext): CoroutineContext =
         StoreExecutionInterceptor(
@@ -786,13 +793,18 @@ public class Store(
     }
 
     internal fun linearHotCode(body: List<Instr>): LinearHotCode {
+        if (lastLinearHotBody === body) return lastLinearHotCode
         linearHotCodes.firstOrNull { (candidate, _) -> candidate === body }
-            ?.let { return it.second }
-        val packedInstructions = LongArray(body.size)
+            ?.let { (_, code) ->
+                lastLinearHotBody = body
+                lastLinearHotCode = code
+                return code
+            }
         val plan = ByteArray(body.size)
+        var linearHotInstructionCount = 0
         for (index in body.indices) {
             val first = body[index]
-            packedInstructions[index] = first.packLinearHotInstruction()
+            if (first.opcode.isLinearHotDispatchOpcode()) linearHotInstructionCount++
             val second = body.getOrNull(index + 1)
             val third = body.getOrNull(index + 2)
             val expressionLength = body.i32ExpressionLengthFrom(index)
@@ -894,8 +906,19 @@ public class Store(
                 }
             }
         }
+        val packedInstructions =
+            if (
+                body.shouldPackLinearHotInstructions(linearHotInstructionCount) &&
+                packedLinearCodeBudget.tryReserve(body.size)
+            ) {
+                LongArray(body.size) { index -> body[index].packLinearHotInstruction() }
+            } else {
+                null
+            }
         val code = LinearHotCode(packedInstructions, plan)
         linearHotCodes.add(body to code)
+        lastLinearHotBody = body
+        lastLinearHotCode = code
         return code
     }
 
@@ -1527,10 +1550,40 @@ internal sealed class GuestExceptionHandler {
     ) : GuestExceptionHandler()
 }
 
+/**
+ * Immutable dispatch metadata for one instruction body. [packedInstructions]
+ * is absent when the body exceeds the cache budget or is too sparse; the
+ * interpreter then uses the original instruction objects while retaining the
+ * independently useful super-instruction [plan].
+ */
 internal class LinearHotCode(
-    val packedInstructions: LongArray,
+    val packedInstructions: LongArray?,
     val plan: ByteArray,
 )
+
+internal class PackedLinearCodeBudget(
+    private val maxInstructions: Int,
+    private val maxBodies: Int,
+) {
+    init {
+        require(maxInstructions >= 0) { "maxInstructions must be non-negative" }
+        require(maxBodies >= 0) { "maxBodies must be non-negative" }
+    }
+
+    var usedInstructions: Int = 0
+        private set
+    var usedBodies: Int = 0
+        private set
+
+    fun tryReserve(instructionCount: Int): Boolean {
+        require(instructionCount >= 0) { "instructionCount must be non-negative" }
+        if (usedBodies >= maxBodies) return false
+        if (instructionCount > maxInstructions - usedInstructions) return false
+        usedInstructions += instructionCount
+        usedBodies++
+        return true
+    }
+}
 
 internal class GuestControlFrame(
     var kind: ControlKind,
@@ -1561,7 +1614,14 @@ internal class GuestCallFrame(
 
 private const val MAX_REUSABLE_FRAMES: Int = 256
 private const val MAX_REUSABLE_CONTROLS: Int = 1_024
-private val EMPTY_LINEAR_HOT_CODE: LinearHotCode = LinearHotCode(LongArray(0), ByteArray(0))
+private val EMPTY_LINEAR_HOT_CODE: LinearHotCode = LinearHotCode(null, ByteArray(0))
+
+internal const val MAX_PACKED_LINEAR_BODY_INSTRUCTIONS: Int = 65_536
+// LongArray payload: at most 512 KiB per body and 2 MiB per Store. The body
+// limit also bounds the aggregate array-header overhead for tiny functions.
+internal const val MAX_PACKED_LINEAR_INSTRUCTIONS_PER_STORE: Int = 262_144
+internal const val MAX_PACKED_LINEAR_BODIES_PER_STORE: Int = 4_096
+private const val PACKED_LINEAR_HOT_DENSITY_DENOMINATOR: Int = 8
 
 internal const val MAX_LINEAR_I32_EXPRESSION_DEPTH: Int = 8
 internal const val LINEAR_PLAN_I32_EXPRESSION_OFFSET: Int = 16
@@ -1595,6 +1655,21 @@ private fun Instr.packLinearHotInstruction(): Long {
     }
     return (immediate.toLong() shl 32) or opcode.toUInt().toLong()
 }
+
+private fun Int.isLinearHotDispatchOpcode(): Boolean =
+    this in 0x20..0x26 ||
+        this in 0x28..0xC4 ||
+        this in 0x02..0x04 ||
+        this in 0x0C..0x10 ||
+        this in 0x1A..0x1C
+
+private fun List<Instr>.shouldPackLinearHotInstructions(hotInstructionCount: Int): Boolean =
+    size <= MAX_PACKED_LINEAR_BODY_INSTRUCTIONS &&
+        hotInstructionCount > 0 &&
+        (
+            size <= PACKED_LINEAR_HOT_DENSITY_DENOMINATOR ||
+                hotInstructionCount * PACKED_LINEAR_HOT_DENSITY_DENOMINATOR >= size
+        )
 
 private fun Int.isPlannedI32Binary(): Boolean =
     this in 0x46..0x4F || this in 0x6A..0x78
