@@ -1,0 +1,5 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Heapy/kotgent/main/schema/project.v1.json",
+  "id": "96b3f5dc-9261-408e-9e0d-a552f02cd87d",
+  "name": "Kotlin WASM"
+}
