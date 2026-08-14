@@ -1204,20 +1204,20 @@ public class Interpreter : ResumableMachine {
             is Drop -> repeat(instruction.n) { stack.removeLast() }
             Select -> select(stack)
             is SelectT -> select(stack)
-            is I32Const -> stack.addLast(Value.I32(instruction.value))
-            is I64Const -> stack.addLast(Value.I64(instruction.value))
-            is F32Const -> stack.addLast(Value.F32(instruction.value))
-            is F64Const -> stack.addLast(Value.F64(instruction.value))
+            is I32Const -> stack.addLastI32(instruction.value)
+            is I64Const -> stack.addLastI64(instruction.value)
+            is F32Const -> stack.addLastF32(instruction.value)
+            is F64Const -> stack.addLastF64(instruction.value)
             is RefNull -> stack.addLast(nullRefFor(instruction.heap, instance.module))
             RefIsNull -> {
                 val value = stack.removeLast()
-                stack.addLast(Value.I32(if (value.isNullRef()) 1 else 0))
+                stack.addLastI32(if (value.isNullRef()) 1 else 0)
             }
             is RefFunc -> stack.addLast(Value.Ref.Func(instruction.funcIndex, instance))
             RefEq -> {
                 val right = stack.removeLast() as Value.Ref
                 val left = stack.removeLast() as Value.Ref
-                stack.addLast(Value.I32(if (sameReference(left, right)) 1 else 0))
+                stack.addLastI32(if (sameReference(left, right)) 1 else 0)
             }
             RefAsNonNull -> {
                 val value = stack.last()
@@ -2004,7 +2004,7 @@ public class Interpreter : ResumableMachine {
                     )
                 }
             }
-            15 -> stack.addLast(Value.I32(popArray(stack).elements.size))
+            15 -> stack.addLastI32(popArray(stack).elements.size)
             16 -> {
                 val type = arrayType(module, instruction.firstIndex)
                 val count = popUnsignedI32(stack)
@@ -2069,7 +2069,7 @@ public class Interpreter : ResumableMachine {
             20, 21 -> {
                 val value = stack.removeLast() as Value.Ref
                 val target = instruction.targetType!!
-                stack.addLast(Value.I32(if (module.referenceMatches(value, target)) 1 else 0))
+                stack.addLastI32(if (module.referenceMatches(value, target)) 1 else 0)
             }
             22, 23 -> {
                 val value = stack.removeLast() as Value.Ref
@@ -2112,8 +2112,8 @@ public class Interpreter : ResumableMachine {
                 val value = stack.removeLastI32()
                 stack.addLast(Value.Ref.I31(value shl 1 shr 1))
             }
-            29 -> stack.addLast(Value.I32((stack.removeLast() as Value.Ref.I31).value))
-            30 -> stack.addLast(Value.I32((stack.removeLast() as Value.Ref.I31).value and 0x7FFF_FFFF))
+            29 -> stack.addLastI32((stack.removeLast() as Value.Ref.I31).value)
+            30 -> stack.addLastI32((stack.removeLast() as Value.Ref.I31).value and 0x7FFF_FFFF)
             else -> throw ExecutionTrap(
                 TrapKind.UNREACHABLE_PARENT,
                 "unknown GC opcode ${instruction.subOpcode}",
@@ -2285,14 +2285,14 @@ public class Interpreter : ResumableMachine {
                 }
                 table.set(index.toInt(), v)
             }
-            0x00_FC -> stack.addLast(Value.I32(truncSatF32ToI32S(stack.removeLastF32())))
-            0x01_FC -> stack.addLast(Value.I32(truncSatF32ToI32U(stack.removeLastF32())))
-            0x02_FC -> stack.addLast(Value.I32(truncSatF64ToI32S(stack.removeLastF64())))
-            0x03_FC -> stack.addLast(Value.I32(truncSatF64ToI32U(stack.removeLastF64())))
-            0x04_FC -> stack.addLast(Value.I64(truncSatF32ToI64S(stack.removeLastF32())))
-            0x05_FC -> stack.addLast(Value.I64(truncSatF32ToI64U(stack.removeLastF32())))
-            0x06_FC -> stack.addLast(Value.I64(truncSatF64ToI64S(stack.removeLastF64())))
-            0x07_FC -> stack.addLast(Value.I64(truncSatF64ToI64U(stack.removeLastF64())))
+            0x00_FC -> stack.addLastI32(truncSatF32ToI32S(stack.removeLastF32()))
+            0x01_FC -> stack.addLastI32(truncSatF32ToI32U(stack.removeLastF32()))
+            0x02_FC -> stack.addLastI32(truncSatF64ToI32S(stack.removeLastF64()))
+            0x03_FC -> stack.addLastI32(truncSatF64ToI32U(stack.removeLastF64()))
+            0x04_FC -> stack.addLastI64(truncSatF32ToI64S(stack.removeLastF32()))
+            0x05_FC -> stack.addLastI64(truncSatF32ToI64U(stack.removeLastF32()))
+            0x06_FC -> stack.addLastI64(truncSatF64ToI64S(stack.removeLastF64()))
+            0x07_FC -> stack.addLastI64(truncSatF64ToI64U(stack.removeLastF64()))
             0x09_FC -> dataDrop(instance, ins.index)
             0x0C_FC -> {
                 val count = stack.removeLastI32().toUInt().toULong()
@@ -2494,20 +2494,20 @@ public class Interpreter : ResumableMachine {
         val mem = instance.memories[ins.memoryIndex]
         val base = effectiveAddress(stack, mem, ins.offset)
         when (ins.opcode) {
-            0x28 -> { mem.checkRange(base, 4); stack.addLast(Value.I32(loadI32(mem, base))) }       // i32.load
-            0x29 -> { mem.checkRange(base, 8); stack.addLast(Value.I64(loadI64(mem, base))) }       // i64.load
-            0x2A -> { mem.checkRange(base, 4); stack.addLast(Value.F32(Float.fromBits(loadI32(mem, base)))) }
-            0x2B -> { mem.checkRange(base, 8); stack.addLast(Value.F64(Double.fromBits(loadI64(mem, base)))) }
-            0x2C -> { mem.checkRange(base, 1); stack.addLast(Value.I32(mem.data()[base.toInt()].toInt())) } // i32.load8_s
-            0x2D -> { mem.checkRange(base, 1); stack.addLast(Value.I32((mem.data()[base.toInt()].toInt() and 0xFF))) } // i32.load8_u
-            0x2E -> { mem.checkRange(base, 2); stack.addLast(Value.I32(loadI16Signed(mem, base))) }
-            0x2F -> { mem.checkRange(base, 2); stack.addLast(Value.I32(loadI16Unsigned(mem, base))) }
-            0x30 -> { mem.checkRange(base, 1); stack.addLast(Value.I64(mem.data()[base.toInt()].toLong())) } // i64.load8_s
-            0x31 -> { mem.checkRange(base, 1); stack.addLast(Value.I64(mem.data()[base.toInt()].toLong() and 0xFFL)) } // i64.load8_u
-            0x32 -> { mem.checkRange(base, 2); stack.addLast(Value.I64(loadI16Signed(mem, base).toLong())) }
-            0x33 -> { mem.checkRange(base, 2); stack.addLast(Value.I64(loadI16Unsigned(mem, base).toLong())) }
-            0x34 -> { mem.checkRange(base, 4); stack.addLast(Value.I64(loadI32(mem, base).toLong())) } // i64.load32_s
-            0x35 -> { mem.checkRange(base, 4); stack.addLast(Value.I64(loadI32(mem, base).toLong() and 0xFFFFFFFFL)) }
+            0x28 -> { mem.checkRange(base, 4); stack.addLastI32(loadI32(mem, base)) }       // i32.load
+            0x29 -> { mem.checkRange(base, 8); stack.addLastI64(loadI64(mem, base)) }       // i64.load
+            0x2A -> { mem.checkRange(base, 4); stack.addLastF32(Float.fromBits(loadI32(mem, base))) }
+            0x2B -> { mem.checkRange(base, 8); stack.addLastF64(Double.fromBits(loadI64(mem, base))) }
+            0x2C -> { mem.checkRange(base, 1); stack.addLastI32(mem.data()[base.toInt()].toInt()) } // i32.load8_s
+            0x2D -> { mem.checkRange(base, 1); stack.addLastI32(mem.data()[base.toInt()].toInt() and 0xFF) } // i32.load8_u
+            0x2E -> { mem.checkRange(base, 2); stack.addLastI32(loadI16Signed(mem, base)) }
+            0x2F -> { mem.checkRange(base, 2); stack.addLastI32(loadI16Unsigned(mem, base)) }
+            0x30 -> { mem.checkRange(base, 1); stack.addLastI64(mem.data()[base.toInt()].toLong()) } // i64.load8_s
+            0x31 -> { mem.checkRange(base, 1); stack.addLastI64(mem.data()[base.toInt()].toLong() and 0xFFL) } // i64.load8_u
+            0x32 -> { mem.checkRange(base, 2); stack.addLastI64(loadI16Signed(mem, base).toLong()) }
+            0x33 -> { mem.checkRange(base, 2); stack.addLastI64(loadI16Unsigned(mem, base).toLong()) }
+            0x34 -> { mem.checkRange(base, 4); stack.addLastI64(loadI32(mem, base).toLong()) } // i64.load32_s
+            0x35 -> { mem.checkRange(base, 4); stack.addLastI64(loadI32(mem, base).toLong() and 0xFFFFFFFFL) }
             else -> throw Trap(TrapKind.UNREACHABLE, "unsupported load opcode 0x${ins.opcode.toString(16)}")
         }
     }
@@ -2584,15 +2584,15 @@ public class Interpreter : ResumableMachine {
 
     private fun pushIndex(stack: RuntimeValueStack, type: IndexType, value: ULong) {
         when (type) {
-            IndexType.I32 -> stack.addLast(Value.I32(value.toUInt().toInt()))
-            IndexType.I64 -> stack.addLast(Value.I64(value.toLong()))
+            IndexType.I32 -> stack.addLastI32(value.toUInt().toInt())
+            IndexType.I64 -> stack.addLastI64(value.toLong())
         }
     }
 
     private fun pushIndexResult(stack: RuntimeValueStack, type: IndexType, result: Int) {
         when (type) {
-            IndexType.I32 -> stack.addLast(Value.I32(result))
-            IndexType.I64 -> stack.addLast(Value.I64(result.toLong()))
+            IndexType.I32 -> stack.addLastI32(result)
+            IndexType.I64 -> stack.addLastI64(result.toLong())
         }
     }
 
@@ -2612,8 +2612,8 @@ public class Interpreter : ResumableMachine {
     ) {
         val memory = instance.memories[memoryIndex]
         when (memory.indexType) {
-            IndexType.I32 -> stack.addLast(Value.I32(memory.sizeInPages.toInt()))
-            IndexType.I64 -> stack.addLast(Value.I64(memory.sizeInPages.toLong()))
+            IndexType.I32 -> stack.addLastI32(memory.sizeInPages.toInt())
+            IndexType.I64 -> stack.addLastI64(memory.sizeInPages.toLong())
         }
     }
 
@@ -2624,13 +2624,13 @@ public class Interpreter : ResumableMachine {
     ) {
         val memory = instance.memories[memoryIndex]
         when (memory.indexType) {
-            IndexType.I32 -> stack.addLast(Value.I32(memory.grow(stack.removeLastI32())))
+            IndexType.I32 -> stack.addLastI32(memory.grow(stack.removeLastI32()))
             IndexType.I64 -> {
                 val requested = stack.removeLastI64().toULong()
                 val result =
                     if (requested > Int.MAX_VALUE.toULong()) -1
                     else memory.grow(requested.toInt())
-                stack.addLast(Value.I64(result.toLong()))
+                stack.addLastI64(result.toLong())
             }
         }
     }
@@ -2656,153 +2656,153 @@ public class Interpreter : ResumableMachine {
     private fun execSimple(opcode: Int, stack: RuntimeValueStack) {
         when (opcode) {
             // i32 comparisons
-            0x45 -> stack.addLast(Value.I32(if (stack.removeLastI32() == 0) 1 else 0))              // i32.eqz
-            0x46 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a == b) 1 else 0)) }
-            0x47 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a != b) 1 else 0)) }
-            0x48 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a < b) 1 else 0)) }              // i32.lt_s
-            0x49 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a.toUInt() < b.toUInt()) 1 else 0)) } // i32.lt_u
-            0x4A -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a > b) 1 else 0)) }              // i32.gt_s
-            0x4B -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a.toUInt() > b.toUInt()) 1 else 0)) } // i32.gt_u
-            0x4C -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a <= b) 1 else 0)) }
-            0x4D -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a.toUInt() <= b.toUInt()) 1 else 0)) }
-            0x4E -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a >= b) 1 else 0)) }
-            0x4F -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(if (a.toUInt() >= b.toUInt()) 1 else 0)) }
+            0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)              // i32.eqz
+            0x46 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a == b) 1 else 0) }
+            0x47 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a != b) 1 else 0) }
+            0x48 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a < b) 1 else 0) }              // i32.lt_s
+            0x49 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a.toUInt() < b.toUInt()) 1 else 0) } // i32.lt_u
+            0x4A -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a > b) 1 else 0) }              // i32.gt_s
+            0x4B -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a.toUInt() > b.toUInt()) 1 else 0) } // i32.gt_u
+            0x4C -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a <= b) 1 else 0) }
+            0x4D -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a.toUInt() <= b.toUInt()) 1 else 0) }
+            0x4E -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a >= b) 1 else 0) }
+            0x4F -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(if (a.toUInt() >= b.toUInt()) 1 else 0) }
             // i64 comparisons
-            0x50 -> stack.addLast(Value.I32(if (stack.removeLastI64() == 0L) 1 else 0))            // i64.eqz
-            0x51 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a == b) 1 else 0)) }
-            0x52 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a != b) 1 else 0)) }
-            0x53 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a < b) 1 else 0)) }              // i64.lt_s
-            0x54 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a.toULong() < b.toULong()) 1 else 0)) } // i64.lt_u
-            0x55 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a > b) 1 else 0)) }              // i64.gt_s
-            0x56 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a.toULong() > b.toULong()) 1 else 0)) } // i64.gt_u
-            0x57 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a <= b) 1 else 0)) }
-            0x58 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a.toULong() <= b.toULong()) 1 else 0)) }
-            0x59 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a >= b) 1 else 0)) }
-            0x5A -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I32(if (a.toULong() >= b.toULong()) 1 else 0)) }
+            0x50 -> stack.addLastI32(if (stack.removeLastI64() == 0L) 1 else 0)            // i64.eqz
+            0x51 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a == b) 1 else 0) }
+            0x52 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a != b) 1 else 0) }
+            0x53 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a < b) 1 else 0) }              // i64.lt_s
+            0x54 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a.toULong() < b.toULong()) 1 else 0) } // i64.lt_u
+            0x55 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a > b) 1 else 0) }              // i64.gt_s
+            0x56 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a.toULong() > b.toULong()) 1 else 0) } // i64.gt_u
+            0x57 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a <= b) 1 else 0) }
+            0x58 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a.toULong() <= b.toULong()) 1 else 0) }
+            0x59 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a >= b) 1 else 0) }
+            0x5A -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI32(if (a.toULong() >= b.toULong()) 1 else 0) }
             // f32 comparisons
-            0x5B -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a == b) 1 else 0)) }
-            0x5C -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a != b) 1 else 0)) }
-            0x5D -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a < b) 1 else 0)) }
-            0x5E -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a > b) 1 else 0)) }
-            0x5F -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a <= b) 1 else 0)) }
-            0x60 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.I32(if (a >= b) 1 else 0)) }
+            0x5B -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a == b) 1 else 0) }
+            0x5C -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a != b) 1 else 0) }
+            0x5D -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a < b) 1 else 0) }
+            0x5E -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a > b) 1 else 0) }
+            0x5F -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a <= b) 1 else 0) }
+            0x60 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastI32(if (a >= b) 1 else 0) }
             // f64 comparisons
-            0x61 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a == b) 1 else 0)) }
-            0x62 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a != b) 1 else 0)) }
-            0x63 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a < b) 1 else 0)) }
-            0x64 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a > b) 1 else 0)) }
-            0x65 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a <= b) 1 else 0)) }
-            0x66 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.I32(if (a >= b) 1 else 0)) }
+            0x61 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a == b) 1 else 0) }
+            0x62 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a != b) 1 else 0) }
+            0x63 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a < b) 1 else 0) }
+            0x64 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a > b) 1 else 0) }
+            0x65 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a <= b) 1 else 0) }
+            0x66 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastI32(if (a >= b) 1 else 0) }
             // i32 arithmetic
             // i32 unary (counting)
-            0x67 -> stack.addLast(Value.I32(clz32(stack.removeLastI32())))   // i32.clz
-            0x68 -> stack.addLast(Value.I32(ctz32(stack.removeLastI32())))   // i32.ctz
-            0x69 -> stack.addLast(Value.I32(popcnt32(stack.removeLastI32()))) // i32.popcnt
+            0x67 -> stack.addLastI32(clz32(stack.removeLastI32()))   // i32.clz
+            0x68 -> stack.addLastI32(ctz32(stack.removeLastI32()))   // i32.ctz
+            0x69 -> stack.addLastI32(popcnt32(stack.removeLastI32())) // i32.popcnt
             // i32 arithmetic
-            0x6A -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a + b)) }
-            0x6B -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a - b)) }
-            0x6C -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a * b)) }
-            0x6D -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(idiv(a, b))) }
-            0x6E -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(udiv(a, b))) }
-            0x6F -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(irem(a, b))) }
-            0x70 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(urem(a, b))) }
-            0x71 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a and b)) }
-            0x72 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a or b)) }
-            0x73 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(a xor b)) }
-            0x74 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(ishl(a, b))) }
-            0x75 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(isr(a, b))) }
-            0x76 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(ushr(a, b))) }
-            0x77 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(rotl(a, b))) }
-            0x78 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLast(Value.I32(rotr(a, b))) }
+            0x6A -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a + b) }
+            0x6B -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a - b) }
+            0x6C -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a * b) }
+            0x6D -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(idiv(a, b)) }
+            0x6E -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(udiv(a, b)) }
+            0x6F -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(irem(a, b)) }
+            0x70 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(urem(a, b)) }
+            0x71 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a and b) }
+            0x72 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a or b) }
+            0x73 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(a xor b) }
+            0x74 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(ishl(a, b)) }
+            0x75 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(isr(a, b)) }
+            0x76 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(ushr(a, b)) }
+            0x77 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(rotl(a, b)) }
+            0x78 -> { val b = stack.removeLastI32(); val a = stack.removeLastI32(); stack.addLastI32(rotr(a, b)) }
             // i64 arithmetic
             // i64 unary (counting)
-            0x79 -> stack.addLast(Value.I64(clz64(stack.removeLastI64())))   // i64.clz
-            0x7A -> stack.addLast(Value.I64(ctz64(stack.removeLastI64())))   // i64.ctz
-            0x7B -> stack.addLast(Value.I64(popcnt64(stack.removeLastI64()))) // i64.popcnt
+            0x79 -> stack.addLastI64(clz64(stack.removeLastI64()))   // i64.clz
+            0x7A -> stack.addLastI64(ctz64(stack.removeLastI64()))   // i64.ctz
+            0x7B -> stack.addLastI64(popcnt64(stack.removeLastI64())) // i64.popcnt
             // i64 arithmetic
-            0x7C -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a + b)) }
-            0x7D -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a - b)) }
-            0x7E -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a * b)) }
-            0x7F -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(ldiv(a, b))) }
-            0x80 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(udiv64(a, b))) }
-            0x81 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lrem(a, b))) }
-            0x82 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lurem(a, b))) }
-            0x83 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a and b)) }
-            0x84 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a or b)) }
-            0x85 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(a xor b)) }
-            0x86 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lshl(a, b))) }
-            0x87 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lshr(a, b))) }
-            0x88 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lushr(a, b))) }
-            0x89 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lrotl(a, b))) }
-            0x8A -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLast(Value.I64(lrotr(a, b))) }
+            0x7C -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a + b) }
+            0x7D -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a - b) }
+            0x7E -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a * b) }
+            0x7F -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(ldiv(a, b)) }
+            0x80 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(udiv64(a, b)) }
+            0x81 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lrem(a, b)) }
+            0x82 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lurem(a, b)) }
+            0x83 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a and b) }
+            0x84 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a or b) }
+            0x85 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(a xor b) }
+            0x86 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lshl(a, b)) }
+            0x87 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lshr(a, b)) }
+            0x88 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lushr(a, b)) }
+            0x89 -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lrotl(a, b)) }
+            0x8A -> { val b = stack.removeLastI64(); val a = stack.removeLastI64(); stack.addLastI64(lrotr(a, b)) }
             // f32 arithmetic
             0x8B -> {
                 val a = stack.removeLastF32()
-                stack.addLast(Value.F32(Float.fromBits(a.toRawBits() and Int.MAX_VALUE)))
+                stack.addLastF32(Float.fromBits(a.toRawBits() and Int.MAX_VALUE))
             }
-            0x8C -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(-a)) }
-            0x8D -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(quietNaN(ceil(a)))) }
-            0x8E -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(quietNaN(floor(a)))) }
-            0x8F -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(truncF(a))) }
-            0x90 -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(roundNearest(a))) }
-            0x91 -> { val a = stack.removeLastF32(); stack.addLast(Value.F32(sqrt(a))) }
-            0x92 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(a + b)) }
-            0x93 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(a - b)) }
-            0x94 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(a * b)) }
-            0x95 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(a / b)) }
-            0x96 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(fmin(a, b))) }
-            0x97 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(fmax(a, b))) }
-            0x98 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLast(Value.F32(copysign(a, b))) }
+            0x8C -> { val a = stack.removeLastF32(); stack.addLastF32(-a) }
+            0x8D -> { val a = stack.removeLastF32(); stack.addLastF32(quietNaN(ceil(a))) }
+            0x8E -> { val a = stack.removeLastF32(); stack.addLastF32(quietNaN(floor(a))) }
+            0x8F -> { val a = stack.removeLastF32(); stack.addLastF32(truncF(a)) }
+            0x90 -> { val a = stack.removeLastF32(); stack.addLastF32(roundNearest(a)) }
+            0x91 -> { val a = stack.removeLastF32(); stack.addLastF32(sqrt(a)) }
+            0x92 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(a + b) }
+            0x93 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(a - b) }
+            0x94 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(a * b) }
+            0x95 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(a / b) }
+            0x96 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(fmin(a, b)) }
+            0x97 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(fmax(a, b)) }
+            0x98 -> { val b = stack.removeLastF32(); val a = stack.removeLastF32(); stack.addLastF32(copysign(a, b)) }
             // f64 arithmetic
             0x99 -> {
                 val a = stack.removeLastF64()
-                stack.addLast(Value.F64(Double.fromBits(a.toRawBits() and Long.MAX_VALUE)))
+                stack.addLastF64(Double.fromBits(a.toRawBits() and Long.MAX_VALUE))
             }
-            0x9A -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(-a)) }
-            0x9B -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(quietNaN(ceil(a)))) }
-            0x9C -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(quietNaN(floor(a)))) }
-            0x9D -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(truncF(a))) }
-            0x9E -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(roundNearestDouble(a))) }
-            0x9F -> { val a = stack.removeLastF64(); stack.addLast(Value.F64(sqrt(a))) }
-            0xA0 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(a + b)) }
-            0xA1 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(a - b)) }
-            0xA2 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(a * b)) }
-            0xA3 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(a / b)) }
-            0xA4 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(fmin(a, b))) }
-            0xA5 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(fmax(a, b))) }
-            0xA6 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLast(Value.F64(copysign(a, b))) }
+            0x9A -> { val a = stack.removeLastF64(); stack.addLastF64(-a) }
+            0x9B -> { val a = stack.removeLastF64(); stack.addLastF64(quietNaN(ceil(a))) }
+            0x9C -> { val a = stack.removeLastF64(); stack.addLastF64(quietNaN(floor(a))) }
+            0x9D -> { val a = stack.removeLastF64(); stack.addLastF64(truncF(a)) }
+            0x9E -> { val a = stack.removeLastF64(); stack.addLastF64(roundNearestDouble(a)) }
+            0x9F -> { val a = stack.removeLastF64(); stack.addLastF64(sqrt(a)) }
+            0xA0 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(a + b) }
+            0xA1 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(a - b) }
+            0xA2 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(a * b) }
+            0xA3 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(a / b) }
+            0xA4 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(fmin(a, b)) }
+            0xA5 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(fmax(a, b)) }
+            0xA6 -> { val b = stack.removeLastF64(); val a = stack.removeLastF64(); stack.addLastF64(copysign(a, b)) }
             // conversions (0xA7..0xBF) — verified against wasm-reference-manual
-            0xA7 -> stack.addLast(Value.I32(stack.removeLastI64().toInt()))                                  // i32.wrap_i64
-            0xA8 -> stack.addLast(Value.I32(truncF32ToI32S(stack.removeLastF32())))                          // i32.trunc_f32_s
-            0xA9 -> stack.addLast(Value.I32(truncF32ToI32U(stack.removeLastF32())))                          // i32.trunc_f32_u
-            0xAA -> stack.addLast(Value.I32(truncF64ToI32S(stack.removeLastF64())))                          // i32.trunc_f64_s
-            0xAB -> stack.addLast(Value.I32(truncF64ToI32U(stack.removeLastF64())))                          // i32.trunc_f64_u
-            0xAC -> stack.addLast(Value.I64(stack.removeLastI32().toLong()))                                 // i64.extend_i32_s
-            0xAD -> stack.addLast(Value.I64(stack.removeLastI32().toLong() and 0xFFFFFFFFL))                 // i64.extend_i32_u
-            0xAE -> stack.addLast(Value.I64(truncF32ToI64S(stack.removeLastF32())))                          // i64.trunc_f32_s
-            0xAF -> stack.addLast(Value.I64(truncF32ToI64U(stack.removeLastF32())))                          // i64.trunc_f32_u
-            0xB0 -> stack.addLast(Value.I64(truncF64ToI64S(stack.removeLastF64())))                          // i64.trunc_f64_s
-            0xB1 -> stack.addLast(Value.I64(truncF64ToI64U(stack.removeLastF64())))                          // i64.trunc_f64_u
-            0xB2 -> stack.addLast(Value.F32(stack.removeLastI32().toFloat()))                                // f32.convert_i32_s
-            0xB3 -> stack.addLast(Value.F32(stack.removeLastI32().toUInt().toFloat()))                       // f32.convert_i32_u
-            0xB4 -> stack.addLast(Value.F32(stack.removeLastI64().toFloat()))                                // f32.convert_i64_s
-            0xB5 -> stack.addLast(Value.F32(unsignedLongBitsToFloat(stack.removeLastI64())))                 // f32.convert_i64_u
-            0xB6 -> stack.addLast(Value.F32(stack.removeLastF64().toFloat()))                                // f32.demote_f64
-            0xB7 -> stack.addLast(Value.F64(stack.removeLastI32().toDouble()))                               // f64.convert_i32_s
-            0xB8 -> stack.addLast(Value.F64(stack.removeLastI32().toUInt().toDouble()))                      // f64.convert_i32_u
-            0xB9 -> stack.addLast(Value.F64(stack.removeLastI64().toDouble()))                               // f64.convert_i64_s
-            0xBA -> stack.addLast(Value.F64(stack.removeLastI64().toULong().toDouble()))                     // f64.convert_i64_u
-            0xBB -> stack.addLast(Value.F64(stack.removeLastF32().toDouble()))                               // f64.promote_f32
-            0xBC -> stack.addLast(Value.I32((stack.removeLast() as Value.F32).v.toRawBits()))                // i32.reinterpret_f32
-            0xBD -> stack.addLast(Value.I64((stack.removeLast() as Value.F64).v.toRawBits()))                // i64.reinterpret_f64
-            0xBE -> stack.addLast(Value.F32(Float.fromBits(stack.removeLastI32())))                          // f32.reinterpret_i32
-            0xBF -> stack.addLast(Value.F64(Double.fromBits(stack.removeLastI64())))                         // f64.reinterpret_i64
+            0xA7 -> stack.addLastI32(stack.removeLastI64().toInt())                                  // i32.wrap_i64
+            0xA8 -> stack.addLastI32(truncF32ToI32S(stack.removeLastF32()))                          // i32.trunc_f32_s
+            0xA9 -> stack.addLastI32(truncF32ToI32U(stack.removeLastF32()))                          // i32.trunc_f32_u
+            0xAA -> stack.addLastI32(truncF64ToI32S(stack.removeLastF64()))                          // i32.trunc_f64_s
+            0xAB -> stack.addLastI32(truncF64ToI32U(stack.removeLastF64()))                          // i32.trunc_f64_u
+            0xAC -> stack.addLastI64(stack.removeLastI32().toLong())                                 // i64.extend_i32_s
+            0xAD -> stack.addLastI64(stack.removeLastI32().toLong() and 0xFFFFFFFFL)                 // i64.extend_i32_u
+            0xAE -> stack.addLastI64(truncF32ToI64S(stack.removeLastF32()))                          // i64.trunc_f32_s
+            0xAF -> stack.addLastI64(truncF32ToI64U(stack.removeLastF32()))                          // i64.trunc_f32_u
+            0xB0 -> stack.addLastI64(truncF64ToI64S(stack.removeLastF64()))                          // i64.trunc_f64_s
+            0xB1 -> stack.addLastI64(truncF64ToI64U(stack.removeLastF64()))                          // i64.trunc_f64_u
+            0xB2 -> stack.addLastF32(stack.removeLastI32().toFloat())                                // f32.convert_i32_s
+            0xB3 -> stack.addLastF32(stack.removeLastI32().toUInt().toFloat())                       // f32.convert_i32_u
+            0xB4 -> stack.addLastF32(stack.removeLastI64().toFloat())                                // f32.convert_i64_s
+            0xB5 -> stack.addLastF32(unsignedLongBitsToFloat(stack.removeLastI64()))                 // f32.convert_i64_u
+            0xB6 -> stack.addLastF32(stack.removeLastF64().toFloat())                                // f32.demote_f64
+            0xB7 -> stack.addLastF64(stack.removeLastI32().toDouble())                               // f64.convert_i32_s
+            0xB8 -> stack.addLastF64(stack.removeLastI32().toUInt().toDouble())                      // f64.convert_i32_u
+            0xB9 -> stack.addLastF64(stack.removeLastI64().toDouble())                               // f64.convert_i64_s
+            0xBA -> stack.addLastF64(stack.removeLastI64().toULong().toDouble())                     // f64.convert_i64_u
+            0xBB -> stack.addLastF64(stack.removeLastF32().toDouble())                               // f64.promote_f32
+            0xBC -> stack.addLastI32(stack.removeLastF32().toRawBits())                              // i32.reinterpret_f32
+            0xBD -> stack.addLastI64(stack.removeLastF64().toRawBits())                              // i64.reinterpret_f64
+            0xBE -> stack.addLastF32(Float.fromBits(stack.removeLastI32()))                          // f32.reinterpret_i32
+            0xBF -> stack.addLastF64(Double.fromBits(stack.removeLastI64()))                         // f64.reinterpret_i64
             // sign-extension proposal (0xC0..0xC4)
-            0xC0 -> { val a = stack.removeLastI32(); stack.addLast(Value.I32(((a shl 24) shr 24))) }          // i32.extend8_s
-            0xC1 -> { val a = stack.removeLastI32(); stack.addLast(Value.I32(((a shl 16) shr 16))) }          // i32.extend16_s
-            0xC2 -> { val a = stack.removeLastI64(); stack.addLast(Value.I64(((a shl 56) shr 56))) }          // i64.extend8_s
-            0xC3 -> { val a = stack.removeLastI64(); stack.addLast(Value.I64(((a shl 48) shr 48))) }          // i64.extend16_s
-            0xC4 -> { val a = stack.removeLastI64(); stack.addLast(Value.I64(((a shl 32) shr 32))) }          // i64.extend32_s
+            0xC0 -> { val a = stack.removeLastI32(); stack.addLastI32((a shl 24) shr 24) }          // i32.extend8_s
+            0xC1 -> { val a = stack.removeLastI32(); stack.addLastI32((a shl 16) shr 16) }          // i32.extend16_s
+            0xC2 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 56) shr 56) }          // i64.extend8_s
+            0xC3 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 48) shr 48) }          // i64.extend16_s
+            0xC4 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 32) shr 32) }          // i64.extend32_s
             else -> throw Trap(TrapKind.UNREACHABLE, "unsupported opcode 0x${opcode.toString(16)}")
         }
     }
