@@ -278,7 +278,7 @@ public class Store(
     internal val frames: ArrayDeque<GuestCallFrame> = ArrayDeque()
     private val reusableFrames: ArrayDeque<GuestCallFrame> = ArrayDeque()
     private val reusableControls: ArrayDeque<GuestControlFrame> = ArrayDeque()
-    private val linearHotPlans: MutableList<Pair<List<Instr>, ByteArray>> = mutableListOf()
+    private val linearHotCodes: MutableList<Pair<List<Instr>, LinearHotCode>> = mutableListOf()
     internal var instructionsUntilCheckpoint: Int = config.checkpointInterval
     internal fun executionContext(callerContext: CoroutineContext): CoroutineContext =
         StoreExecutionInterceptor(
@@ -758,7 +758,7 @@ public class Store(
         exceptionHandler: GuestExceptionHandler? = null,
         caughtException: GuestException? = null,
     ): GuestControlFrame {
-        val linearHotPlan = linearHotPlan(body)
+        val linearHotCode = linearHotCode(body)
         val control = reusableControls.removeLastOrNull()
             ?: return GuestControlFrame(
                 kind,
@@ -770,7 +770,7 @@ public class Store(
                 labelArity,
                 exceptionHandler,
                 caughtException,
-                linearHotPlan,
+                linearHotCode,
             )
         control.kind = kind
         control.body = body
@@ -781,16 +781,18 @@ public class Store(
         control.labelArity = labelArity
         control.exceptionHandler = exceptionHandler
         control.caughtException = caughtException
-        control.linearHotPlan = linearHotPlan
+        control.linearHotCode = linearHotCode
         return control
     }
 
-    internal fun linearHotPlan(body: List<Instr>): ByteArray {
-        linearHotPlans.firstOrNull { (candidate, _) -> candidate === body }
+    internal fun linearHotCode(body: List<Instr>): LinearHotCode {
+        linearHotCodes.firstOrNull { (candidate, _) -> candidate === body }
             ?.let { return it.second }
+        val packedInstructions = LongArray(body.size)
         val plan = ByteArray(body.size)
         for (index in body.indices) {
             val first = body[index]
+            packedInstructions[index] = first.packLinearHotInstruction()
             val second = body.getOrNull(index + 1)
             val third = body.getOrNull(index + 2)
             val expressionLength = body.i32ExpressionLengthFrom(index)
@@ -892,8 +894,9 @@ public class Store(
                 }
             }
         }
-        linearHotPlans.add(body to plan)
-        return plan
+        val code = LinearHotCode(packedInstructions, plan)
+        linearHotCodes.add(body to code)
+        return code
     }
 
     internal fun releaseLastGuestControl(frame: GuestCallFrame) {
@@ -953,7 +956,7 @@ public class Store(
             control.body = emptyList()
             control.exceptionHandler = null
             control.caughtException = null
-            control.linearHotPlan = EMPTY_LINEAR_HOT_PLAN
+            control.linearHotCode = EMPTY_LINEAR_HOT_CODE
             reusableControls.addLast(control)
         }
     }
@@ -1230,7 +1233,7 @@ public class Store(
                             control.bodyPath,
                         ),
                         caughtException = control.caughtException,
-                        linearHotPlan = linearHotPlan(body),
+                        linearHotCode = linearHotCode(body),
                     ),
                 )
             }
@@ -1524,6 +1527,11 @@ internal sealed class GuestExceptionHandler {
     ) : GuestExceptionHandler()
 }
 
+internal class LinearHotCode(
+    val packedInstructions: LongArray,
+    val plan: ByteArray,
+)
+
 internal class GuestControlFrame(
     var kind: ControlKind,
     var body: List<Instr>,
@@ -1534,7 +1542,7 @@ internal class GuestControlFrame(
     var labelArity: Int,
     var exceptionHandler: GuestExceptionHandler? = null,
     var caughtException: GuestException? = null,
-    var linearHotPlan: ByteArray = EMPTY_LINEAR_HOT_PLAN,
+    var linearHotCode: LinearHotCode = EMPTY_LINEAR_HOT_CODE,
 )
 
 internal class GuestCallFrame(
@@ -1553,7 +1561,7 @@ internal class GuestCallFrame(
 
 private const val MAX_REUSABLE_FRAMES: Int = 256
 private const val MAX_REUSABLE_CONTROLS: Int = 1_024
-private val EMPTY_LINEAR_HOT_PLAN: ByteArray = ByteArray(0)
+private val EMPTY_LINEAR_HOT_CODE: LinearHotCode = LinearHotCode(LongArray(0), ByteArray(0))
 
 internal const val MAX_LINEAR_I32_EXPRESSION_DEPTH: Int = 8
 internal const val LINEAR_PLAN_I32_EXPRESSION_OFFSET: Int = 16
@@ -1578,6 +1586,15 @@ internal const val LINEAR_PLAN_LOCAL_BINARY: Byte = 5
 internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY: Byte = 6
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD: Byte = 7
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD: Byte = 8
+
+private fun Instr.packLinearHotInstruction(): Long {
+    val immediate = when (this) {
+        is Instr.FcIndex -> index
+        is Instr.I32Const -> value
+        else -> 0
+    }
+    return (immediate.toLong() shl 32) or opcode.toUInt().toLong()
+}
 
 private fun Int.isPlannedI32Binary(): Boolean =
     this in 0x46..0x4F || this in 0x6A..0x78
