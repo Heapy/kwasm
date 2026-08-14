@@ -317,9 +317,12 @@ public class Interpreter : ResumableMachine {
         control: GuestControlFrame,
     ) {
         val canonicalizeNaNs = store.config.canonicalizeNaNs
-        while (control.pc < control.body.size) {
-            val instruction = control.body[control.pc]
-            val opcode = instruction.opcode
+        val body = control.body
+        val linearHotCode = control.linearHotCode
+        while (control.pc < body.size) {
+            val pc = control.pc
+            val packedInstruction = linearHotCode.packedInstructions[pc]
+            val opcode = packedInstruction.toInt()
             if (
                 opcode !in 0x20..0x26 &&
                 opcode !in 0x28..0xC4 &&
@@ -337,11 +340,11 @@ public class Interpreter : ResumableMachine {
             }
             if (
                 opcode == 0x10 &&
-                frame.instance.isImportedFunction((instruction as Call).funcIndex)
+                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
             ) {
                 return
             }
-            val superInstruction = control.linearHotPlan[control.pc].toInt()
+            val superInstruction = linearHotCode.plan[pc].toInt()
             if (
                 superInstruction != 0 &&
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
@@ -349,8 +352,8 @@ public class Interpreter : ResumableMachine {
                 executePlannedSuperInstruction(
                     store,
                     frame,
-                    control.body,
-                    control.pc,
+                    body,
+                    pc,
                     superInstruction,
                 )
             ) {
@@ -363,6 +366,7 @@ public class Interpreter : ResumableMachine {
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
+                val instruction = body[pc]
                 executeNonSuspendingHotInstruction(store, frame, instruction)
                 if (
                     store.frames.lastOrNull() !== frame ||
@@ -371,7 +375,14 @@ public class Interpreter : ResumableMachine {
                     return
                 }
             } else {
-                executeLinearHotInstruction(store, frame, instruction)
+                executeLinearHotInstruction(
+                    store,
+                    frame,
+                    opcode,
+                    (packedInstruction shr 32).toInt(),
+                    body,
+                    pc,
+                )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
             store.ensureValueStackLimit()
@@ -390,10 +401,13 @@ public class Interpreter : ResumableMachine {
         checkpointCompletedForFirstInstruction: Boolean,
     ): LinearHotLoopResult {
         val canonicalizeNaNs = store.config.canonicalizeNaNs
+        val body = control.body
+        val linearHotCode = control.linearHotCode
         var checkpointCompleted = checkpointCompletedForFirstInstruction
-        while (control.pc < control.body.size) {
-            val instruction = control.body[control.pc]
-            val opcode = instruction.opcode
+        while (control.pc < body.size) {
+            val pc = control.pc
+            val packedInstruction = linearHotCode.packedInstructions[pc]
+            val opcode = packedInstruction.toInt()
             if (
                 opcode !in 0x20..0x26 &&
                 opcode !in 0x28..0xC4 &&
@@ -411,11 +425,11 @@ public class Interpreter : ResumableMachine {
             }
             if (
                 opcode == 0x10 &&
-                frame.instance.isImportedFunction((instruction as Call).funcIndex)
+                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
             ) {
                 return LinearHotLoopResult.Complete
             }
-            val superInstruction = control.linearHotPlan[control.pc].toInt()
+            val superInstruction = linearHotCode.plan[pc].toInt()
             val plannedInstructionCount = plannedInstructionCount(superInstruction)
             if (
                 !checkpointCompleted &&
@@ -426,8 +440,8 @@ public class Interpreter : ResumableMachine {
                 executePlannedSuperInstruction(
                     store,
                     frame,
-                    control.body,
-                    control.pc,
+                    body,
+                    pc,
                     superInstruction,
                 )
             ) {
@@ -452,6 +466,7 @@ public class Interpreter : ResumableMachine {
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
+                val instruction = body[pc]
                 val result = executeNonSuspendingHotInstruction(store, frame, instruction)
                 if (result == FastInstructionResult.RequiresSlowCheckpoint) {
                     return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
@@ -463,7 +478,14 @@ public class Interpreter : ResumableMachine {
                     return LinearHotLoopResult.Complete
                 }
             } else {
-                executeLinearHotInstruction(store, frame, instruction)
+                executeLinearHotInstruction(
+                    store,
+                    frame,
+                    opcode,
+                    (packedInstruction shr 32).toInt(),
+                    body,
+                    pc,
+                )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
             store.ensureValueStackLimit()
@@ -799,24 +821,27 @@ public class Interpreter : ResumableMachine {
     private inline fun executeLinearHotInstruction(
         store: Store,
         frame: GuestCallFrame,
-        instruction: Instr,
+        opcode: Int,
+        immediate: Int,
+        body: List<Instr>,
+        pc: Int,
     ) {
         val stack = store.valueStack
-        when (instruction.opcode) {
+        when (opcode) {
             0x20 -> store.localStack.copyTo(
-                frame.localsBase + (instruction as FcIndex).index,
+                frame.localsBase + immediate,
                 stack,
             )
             0x21 -> stack.moveLastTo(
                 store.localStack,
-                frame.localsBase + (instruction as FcIndex).index,
+                frame.localsBase + immediate,
             )
             0x22 -> stack.copyTo(
                 stack.lastIndex,
                 store.localStack,
-                frame.localsBase + (instruction as FcIndex).index,
+                frame.localsBase + immediate,
             )
-            0x41 -> stack.addLastI32((instruction as I32Const).value)
+            0x41 -> stack.addLastI32(immediate)
             0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)
             0x46 -> {
                 val right = stack.removeLastI32()
@@ -946,7 +971,7 @@ public class Interpreter : ResumableMachine {
                 val left = stack.removeLastI32()
                 stack.addLastI32(rotr(left, right))
             }
-            else -> executeNonSuspendingHotInstruction(store, frame, instruction)
+            else -> executeNonSuspendingHotInstruction(store, frame, body[pc])
         }
     }
 
@@ -1632,7 +1657,7 @@ public class Interpreter : ResumableMachine {
                                 exception.arguments.forEach(store.valueStack::addLast)
                             }
                             control.body = body
-                            control.linearHotPlan = store.linearHotPlan(body)
+                            control.linearHotCode = store.linearHotCode(body)
                             control.pc = 0
                             control.exceptionHandler = null
                             control.caughtException = exception
