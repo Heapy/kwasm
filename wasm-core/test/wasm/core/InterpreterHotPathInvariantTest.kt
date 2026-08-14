@@ -7,6 +7,9 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class InterpreterHotPathInvariantTest {
@@ -19,7 +22,8 @@ class InterpreterHotPathInvariantTest {
         val storedBody = module.functions.single().body
 
         val hotCode = store.linearHotCode(storedBody)
-        assertEquals(Int.MIN_VALUE, (hotCode.packedInstructions.single() shr 32).toInt())
+        val packedInstructions = assertNotNull(hotCode.packedInstructions)
+        assertEquals(Int.MIN_VALUE, (packedInstructions.single() shr 32).toInt())
         assertEquals(listOf(Value.I32(Int.MIN_VALUE)), instance.invoke("value"))
     }
 
@@ -34,13 +38,100 @@ class InterpreterHotPathInvariantTest {
         val first = store.linearHotCode(body)
         val cached = store.linearHotCode(body)
         val equalButDistinct = store.linearHotCode(equalBody)
+        val firstAfterOtherBody = store.linearHotCode(body)
 
         assertTrue(first === cached)
         assertTrue(first !== equalButDistinct)
-        assertContentEquals(first.packedInstructions, equalButDistinct.packedInstructions)
+        assertTrue(first === firstAfterOtherBody)
+        assertContentEquals(
+            assertNotNull(first.packedInstructions),
+            assertNotNull(equalButDistinct.packedInstructions),
+        )
         assertContentEquals(first.plan, equalButDistinct.plan)
         assertHotCodeIsAligned(body, first)
         assertHotCodeIsAligned(equalBody, equalButDistinct)
+    }
+
+    @Test
+    fun packedInstructionBudgetRejectsOverflowWithoutOvercommitting() {
+        val budget = PackedLinearCodeBudget(maxInstructions = 3, maxBodies = 2)
+
+        assertTrue(budget.tryReserve(2))
+        assertEquals(2, budget.usedInstructions)
+        assertEquals(1, budget.usedBodies)
+        assertFalse(budget.tryReserve(2))
+        assertEquals(2, budget.usedInstructions)
+        assertTrue(budget.tryReserve(1))
+        assertEquals(3, budget.usedInstructions)
+        assertEquals(2, budget.usedBodies)
+        assertFalse(budget.tryReserve(0))
+        assertFalse(budget.tryReserve(1))
+    }
+
+    @Test
+    fun storeStopsPackingAfterItsInstructionBudgetIsExhausted() {
+        val store = Store()
+        repeat(MAX_PACKED_LINEAR_INSTRUCTIONS_PER_STORE / MAX_PACKED_LINEAR_BODY_INSTRUCTIONS) {
+            val body = List<Instr>(MAX_PACKED_LINEAR_BODY_INSTRUCTIONS) { I32Const(it) }
+            assertNotNull(store.linearHotCode(body).packedInstructions)
+        }
+        val overflowBody = List<Instr>(MAX_PACKED_LINEAR_BODY_INSTRUCTIONS) { I32Const(it) }
+
+        assertNull(store.linearHotCode(overflowBody).packedInstructions)
+    }
+
+    @Test
+    fun oversizedHotBodyFallsBackToInstructions(): Unit = runBlocking {
+        val body = buildList(MAX_PACKED_LINEAR_BODY_INSTRUCTIONS + 1) {
+            repeat(MAX_PACKED_LINEAR_BODY_INSTRUCTIONS / 2) {
+                add(I32Const(0))
+                add(Instr.Drop())
+            }
+            add(I32Const(7))
+        }
+        val module = moduleReturning(body)
+        val storedBody = module.functions.single().body
+
+        for (mode in CheckpointMode.entries) {
+            val store = Store(StoreConfig(checkpointMode = mode))
+            assertNull(store.linearHotCode(storedBody).packedInstructions)
+            assertEquals(
+                listOf(Value.I32(7)),
+                Instance(store, module, ResolvedImports()).invoke("value"),
+            )
+        }
+    }
+
+    @Test
+    fun sparseBodyExecutesWithoutPackedInstructions(): Unit = runBlocking {
+        val module = moduleReturning(
+            List<Instr>(80) { index ->
+                if (index == 0) I32Const(7) else Instr.Nop
+            },
+        )
+        val body = module.functions.single().body
+
+        for (mode in CheckpointMode.entries) {
+            val store = Store(StoreConfig(checkpointMode = mode))
+            assertNull(store.linearHotCode(body).packedInstructions)
+            assertEquals(
+                listOf(Value.I32(7)),
+                Instance(store, module, ResolvedImports()).invoke("value"),
+            )
+        }
+    }
+
+    @Test
+    fun packingDensityIncludesTheOneEighthBoundary() {
+        val atBoundary = List<Instr>(16) { index ->
+            if (index < 2) I32Const(index) else Instr.Nop
+        }
+        val belowBoundary = List<Instr>(17) { index ->
+            if (index < 2) I32Const(index) else Instr.Nop
+        }
+
+        assertNotNull(Store().linearHotCode(atBoundary).packedInstructions)
+        assertNull(Store().linearHotCode(belowBoundary).packedInstructions)
     }
 
     @Test
@@ -142,10 +233,11 @@ class InterpreterHotPathInvariantTest {
     }
 
     private fun assertHotCodeIsAligned(body: List<Instr>, hotCode: LinearHotCode) {
-        assertEquals(body.size, hotCode.packedInstructions.size)
+        val packedInstructions = assertNotNull(hotCode.packedInstructions)
+        assertEquals(body.size, packedInstructions.size)
         assertEquals(body.size, hotCode.plan.size)
         body.indices.forEach { index ->
-            assertEquals(body[index].opcode, hotCode.packedInstructions[index].toInt())
+            assertEquals(body[index].opcode, packedInstructions[index].toInt())
         }
         assertEquals(
             LINEAR_PLAN_I32_EXPRESSION_OFFSET + body.size,
