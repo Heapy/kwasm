@@ -408,7 +408,7 @@ public class WatComposer(private val module: Node) {
             }
             items.getOrNull(i) is Node -> {
                 // offset expression for active elem into table 0
-                mode = ElemModeSpec.Active(listOf(items[i] as Sexpr)); i++
+                mode = ElemModeSpec.Active(listOf(items[i])); i++
             }
             else -> {
                 // numeric table index then offset, or passive/declarative keywords
