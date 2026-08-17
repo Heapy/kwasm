@@ -26,7 +26,6 @@ kotlin {
     linuxArm64()
     linuxX64()
     macosArm64()
-    macosX64()
 
     targets.withType<KotlinNativeTarget>().configureEach {
         compilations.getByName("main").cinterops.create("nativeWasiFs") {
