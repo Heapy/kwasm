@@ -34,7 +34,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORG_GRADLE_PROJECT_kotlin.native.enableKlibsCrossCompilation: "false"
   WASM_TOOLS_VERSION: 1.243.0
   WASM_TOOLS_SHA256: f261622f8015d38ebe9c3345cc2f7bb5de055d3a66ab44efdf78f11068ed9d9f
   WASMTIME_VERSION: 46.0.1

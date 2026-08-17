@@ -13,7 +13,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORG_GRADLE_PROJECT_kotlin.native.enableKlibsCrossCompilation: "false"
   SPEC_TAG: wg-3.0
   SPEC_COMMIT: 9d36019973201a19f9c9ebb0f10828b2fe2374aa
   WABT_COMMIT: 11602da5423eb9c7517311ed01917ea231594170

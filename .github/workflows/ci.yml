@@ -14,9 +14,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ORG_GRADLE_PROJECT_kotlin.native.enableKlibsCrossCompilation: "false"
-
 jobs:
   kotlin-wasm-compiler-compatibility:
     name: Kotlin/Wasm 2.4.10/2.3.21 × 2 EH encodings

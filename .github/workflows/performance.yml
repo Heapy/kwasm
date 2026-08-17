@@ -16,9 +16,6 @@ concurrency:
   group: performance-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ORG_GRADLE_PROJECT_kotlin.native.enableKlibsCrossCompilation: "false"
-
 jobs:
   ios-footprint:
     name: iOS incremental footprint
