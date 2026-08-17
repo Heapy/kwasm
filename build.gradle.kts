@@ -10,4 +10,10 @@ plugins {
 allprojects {
     group = "io.heapy.kwasm"
     version = "0.1.0-SNAPSHOT"
+
+    plugins.withType<org.jetbrains.kotlin.gradle.targets.wasm.nodejs.WasmNodeJsPlugin> {
+        extensions.configure<org.jetbrains.kotlin.gradle.targets.wasm.nodejs.WasmNodeJsEnvSpec> {
+            download = false
+        }
+    }
 }
