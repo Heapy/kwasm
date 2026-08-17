@@ -584,7 +584,7 @@ class KwasmBindgenHostImportsTest {
                 "Expected ${T::class.simpleName}, received ${failure::class.simpleName}: " +
                     failure.message,
             )
-            failure as T
+            failure
         }
 
     private data class PendingCall(
