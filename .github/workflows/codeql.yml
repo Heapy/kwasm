@@ -19,6 +19,9 @@ concurrency:
   group: codeql-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ORG_GRADLE_PROJECT_kotlin.native.enableKlibsCrossCompilation: "false"
+
 jobs:
   analyze:
     name: Analyze Java and Kotlin
