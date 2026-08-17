@@ -100,10 +100,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          read -r -a gradle_tasks <<< "$GRADLE_TASKS"
           ./gradlew --stacktrace --console=plain \
             :tck:verifyTckExclusions \
             :tck:verifyWast2JsonExclusions \
-            $GRADLE_TASKS \
+            "${gradle_tasks[@]}" \
             -Pkwasm.tck.wastDir="$GITHUB_WORKSPACE/upstream/spec-core-wg3" \
             -Pkwasm.tck.converterExclusions=wg-3.0 \
             -Pkwasm.wabt.wast2json="$GITHUB_WORKSPACE/upstream/wabt/build/wast2json" \
