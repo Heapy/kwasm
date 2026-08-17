@@ -17,3 +17,4 @@ settings:
     version: "2.4.10"
     languageVersion: "2.4"
     apiVersion: "2.4"
+    optIns: [io.heapy.kwasm.ExperimentalKwasmApi]
