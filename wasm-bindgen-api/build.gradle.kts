@@ -24,7 +24,7 @@ kotlin {
     compilerOptions {
         optIn.add("io.heapy.kwasm.ExperimentalKwasmApi")
     }
-    androidLibrary {
+    android {
         namespace = "io.heapy.kwasm.bindgen"
         compileSdk = 36
         minSdk = 26
