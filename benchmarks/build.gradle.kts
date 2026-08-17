@@ -15,6 +15,7 @@ kotlin {
     jvmToolchain(17)
     compilerOptions {
         optIn.add("io.heapy.kwasm.ExperimentalKwasmApi")
+        freeCompilerArgs.add("-Xexpect-actual-classes")
     }
 
     jvm {
