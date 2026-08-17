@@ -479,7 +479,7 @@ public class WatComposer(private val module: Node) {
                 // numeric mem index then offset
                 if (items.getOrNull(i) is Sym) {
                     memIdx = parseNat((items[i] as Sym).text).toInt(); i++
-                    mode = DataModeSpec.Active(listOf(items[i] as Sexpr)); i++
+                    mode = DataModeSpec.Active(listOf(items[i])); i++
                 }
             }
         }
