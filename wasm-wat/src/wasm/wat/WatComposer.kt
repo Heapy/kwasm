@@ -397,7 +397,7 @@ public class WatComposer(private val module: Node) {
         when {
             items.getOrNull(i) is Sym && (items[i] as Sym).text.startsWith("$") -> {
                 tableIdx = resolveIdx(items[i], tableNames); i++
-                mode = ElemModeSpec.Active(listOf(items[i] as Sexpr)); i++
+                mode = ElemModeSpec.Active(listOf(items[i])); i++
             }
             items.getOrNull(i) is Sym && (items[i] as Sym).text == "declare" -> {
                 mode = ElemModeSpec.Declarative; i++
