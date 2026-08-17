@@ -732,7 +732,7 @@ public class WatComposer(private val module: Node) {
                 for (f in funcs) {
                     val funcBody = BinaryWriter()
                     // locals grouping
-                    val localInstr = funcBody as BinaryWriter
+                    val localInstr = funcBody
                     val groups = groupLocals(f.locals)
                     localInstr.writeU32(groups.size.toLong())
                     for ((count, type) in groups) {
