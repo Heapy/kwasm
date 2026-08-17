@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
 }
@@ -7,7 +9,9 @@ kotlin {
         binaries.framework {
             baseName = "KwasmFootprintBaseline"
             isStatic = true
-            binaryOption("smallBinary", "true")
+            if (buildType == NativeBuildType.RELEASE) {
+                binaryOption("smallBinary", "true")
+            }
             binaryOption("latin1Strings", "true")
         }
     }
