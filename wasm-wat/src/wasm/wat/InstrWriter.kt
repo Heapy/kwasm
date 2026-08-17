@@ -351,7 +351,7 @@ internal class InstrWriter(
             MatchKind.LOAD_STORE -> {
                 out.writeByte(m.opcode)
                 val (align, offset) = memarg(args)
-                out.writeU32(align.toLong()); out.writeU32(offset.toLong())
+                out.writeU32(align.toLong()); out.writeU32(offset)
             }
         }
     }
