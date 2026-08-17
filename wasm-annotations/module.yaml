@@ -2,11 +2,7 @@ product:
   type: kmp/lib
   platforms: [android, iosArm64, iosSimulatorArm64, jvm, linuxArm64, linuxX64, macosArm64]
 
-description: "kwasm core: validated WebAssembly modules and the suspendable interpreter."
-
-dependencies:
-  - ../wasm-annotations
-  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2
+description: "Shared API-stability annotations for kwasm."
 
 settings:
   android:
