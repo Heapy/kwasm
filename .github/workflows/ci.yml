@@ -156,6 +156,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Verify target
+        shell: bash
         env:
           GRADLE_TASKS: ${{ matrix.tasks }}
-        run: ./gradlew --stacktrace $GRADLE_TASKS
+        run: |
+          set -euo pipefail
+          read -r -a gradle_tasks <<< "$GRADLE_TASKS"
+          ./gradlew --stacktrace "${gradle_tasks[@]}"
