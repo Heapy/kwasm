@@ -26,7 +26,7 @@ The same generated corpus can run in a standalone Native test executable on
 the matching macOS or Linux host:
 
 ```shell
-# Apple silicon host; use macosX64Test on an Intel Mac.
+# Apple silicon host.
 ./gradlew :tck:macosArm64Test \
   -Pkwasm.tck.wastDir=/path/to/spec/test/core \
   -Pkwasm.wabt.wast2json=/path/to/wast2json
@@ -132,7 +132,7 @@ checkout:
 
 The core jobs stage the 97 top-level `test/core` scripts. WABT converts 89;
 the eight issue-backed parser exclusions above are reported as not executed.
-The generated corpus runs on JVM, Linux x64/arm64 Native, macOS x64/arm64
+The generated corpus runs on JVM, Linux x64/arm64 Native, macOS arm64
 Native, and the arm64 iOS simulator. Gradle passes the generated corpus and
 exclusion roots into the simulator test process explicitly; a configured
 simulator run must execute the corpus rather than silently behaving like an

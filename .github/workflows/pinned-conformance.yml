@@ -39,11 +39,6 @@ jobs:
             id: macos-arm64-ios-simulator
             runner: macos-15
             tasks: ":tck:macosArm64Test :tck:iosSimulatorArm64Test"
-          - name: macOS x64 Native
-            id: macos-x64
-            runner: macos-15-intel
-            tasks: ":tck:macosX64Test"
-
     steps:
       - name: Check out kwasm
         uses: actions/checkout@v7

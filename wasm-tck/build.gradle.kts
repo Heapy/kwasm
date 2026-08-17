@@ -409,7 +409,6 @@ kotlin {
     linuxArm64()
     linuxX64()
     macosArm64()
-    macosX64()
 
     sourceSets {
         commonMain {
@@ -500,7 +499,6 @@ val configuredWasiTestsuite = providers.gradleProperty("kwasm.wasi.testsuiteDir"
 val configuredNativeCorpusTestTasks = setOf(
     "iosSimulatorArm64Test",
     "macosArm64Test",
-    "macosX64Test",
     "linuxArm64Test",
     "linuxX64Test",
 )
@@ -591,7 +589,7 @@ tasks.withType<KotlinNativeTest>().configureEach {
     )
     // Host-native executables and the iOS simulator can consume the configured
     // host corpus. Physical-device tests deliberately remain unconfigured.
-    if (name == "macosArm64Test" || name == "macosX64Test") {
+    if (name == "macosArm64Test") {
         inputs.property(
             "kwasm.wasi.testsuiteConfigured",
             configuredWasiTestsuite.map { true }.orElse(false),

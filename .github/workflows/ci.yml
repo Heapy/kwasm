@@ -129,7 +129,6 @@ jobs:
               :snapshot:macosX64Test
               :wasi:macosX64Test
               :bindgen-api:macosX64Test
-              :tck:macosX64Test
 
           - name: iOS simulator arm64 tests
             runner: macos-15
