@@ -12,7 +12,7 @@ kotlin {
     explicitApi()
     jvmToolchain(17)
 
-    androidLibrary {
+    android {
         namespace = "io.heapy.kwasm.annotations"
         compileSdk = 36
         minSdk = 26
