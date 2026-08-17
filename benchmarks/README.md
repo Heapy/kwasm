@@ -123,7 +123,7 @@ and Chasm commit:
   -Pkwasm.benchmark.externalComparisons=benchmarks/build/performance/external-comparisons-jvm.json
 ```
 
-Replace `jvm` with `macosArm64`, `macosX64`, `linuxArm64`, or `linuxX64` for
+Replace `jvm` with `macosArm64`, `linuxArm64`, or `linuxX64` for
 the per-target Native tasks. Same-target Chasm rows for all four workloads
 activate the fatal `NFR-1` ≤2.5× geomean gate. A partial set is reported as
 `partial` and is not treated as proof. Missing records remain `unmeasured`;

@@ -22,7 +22,6 @@ kotlin {
         compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
     }
     macosArm64()
-    macosX64()
     linuxArm64()
     linuxX64()
 
@@ -136,14 +135,13 @@ benchmark {
     targets {
         register("jvm")
         register("macosArm64")
-        register("macosX64")
         register("linuxArm64")
         register("linuxX64")
     }
 }
 
 val gateTool = layout.projectDirectory.file("tools/performance_gate.py")
-val benchmarkTargets = listOf("jvm", "macosArm64", "macosX64", "linuxArm64", "linuxX64")
+val benchmarkTargets = listOf("jvm", "macosArm64", "linuxArm64", "linuxX64")
 
 benchmarkTargets.forEach { target ->
     val capitalized = target.replaceFirstChar { it.uppercaseChar() }
