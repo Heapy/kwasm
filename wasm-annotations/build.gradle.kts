@@ -26,7 +26,6 @@ kotlin {
     linuxArm64()
     linuxX64()
     macosArm64()
-    macosX64()
     wasmJs {
         nodejs()
     }
