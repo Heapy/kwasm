@@ -71,6 +71,15 @@ tasks.withType<Kotlin2JsCompile>().configureEach {
     }
 }
 
+// The test KSP output deliberately links against the bindgen host ABI. The
+// stock Kotlin/Wasm Node runners cannot supply those application imports; the
+// JVM contract test below links both binaries and verifies their ABI instead.
+listOf("wasmJsNodeTest", "wasmWasiNodeTest").forEach { taskName ->
+    tasks.named(taskName) {
+        enabled = false
+    }
+}
+
 dependencies {
     add("kspJvmTest", project(":bindgen-ksp"))
     add("kspWasmJsTest", project(":bindgen-ksp"))
