@@ -93,7 +93,7 @@ Published artifacts: `io.heapy.kwasm:kwasm-core`, `io.heapy.kwasm:kwasm-snapshot
 
 ### 4.2 Supported Kotlin/platform targets
 
-`[ARCH-3]` v1 targets: `jvm` (JDK 17+), `androidTarget` (API 26+), `iosArm64`, `iosSimulatorArm64`, `macosArm64`, `macosX64`, `linuxX64`, `linuxArm64`. `mingwX64` and `js`/`wasmJs` are SHOULD, post-1.0.
+`[ARCH-3]` v1 targets: `jvm` (JDK 17+), `androidTarget` (API 26+), `iosArm64`, `iosSimulatorArm64`, `macosArm64`, `linuxX64`, `linuxArm64`. `mingwX64` and `js`/`wasmJs` are SHOULD, post-1.0.
 
 `[ARCH-4]` Toolchain baseline: Kotlin 2.2+, kotlinx-coroutines 1.10+.
 

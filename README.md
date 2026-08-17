@@ -94,11 +94,11 @@ The v1 build declares these targets:
 | JVM | `jvm` | JDK 17 |
 | Android | `androidTarget` | API 26 |
 | iOS | `iosArm64`, `iosSimulatorArm64` | Current Kotlin-supported Apple SDK |
-| macOS | `macosArm64`, `macosX64` | Current Kotlin-supported macOS |
+| macOS | `macosArm64` | Current Kotlin-supported macOS |
 | Linux | `linuxArm64`, `linuxX64` | Current Kotlin/Native toolchain |
 
-CI runs executable tests on JVM, both Linux architectures, both macOS
-architectures, and the arm64 iOS simulator. Android and physical-device iOS
+CI runs executable tests on JVM, both Linux architectures, macOS arm64, and
+the arm64 iOS simulator. Android and physical-device iOS
 artifacts are compile-checked. `:bindgen-api` and its lightweight
 `:annotations` dependency additionally declare experimental `wasmJs` and
 `wasmWasi` targets. `:bindgen-runtime` declares the same JVM, Android, and
@@ -469,8 +469,7 @@ manifest with the JVM and current-host Native adapters:
   -Pkwasm.wabt.wast2json=/path/to/wast2json
 ```
 
-Use `macosX64Test`, `linuxX64Test`, or `linuxArm64Test` on the corresponding
-host.
+Use `linuxX64Test` or `linuxArm64Test` on the corresponding host.
 
 Without `kwasm.tck.wastDir`, the generated-corpus test is a no-op and the
 ordinary repository harness tests still run.

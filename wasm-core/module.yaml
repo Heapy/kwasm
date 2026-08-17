@@ -1,6 +1,6 @@
 product:
   type: kmp/lib
-  platforms: [android, iosArm64, iosSimulatorArm64, jvm, linuxArm64, linuxX64, macosArm64, macosX64]
+  platforms: [android, iosArm64, iosSimulatorArm64, jvm, linuxArm64, linuxX64, macosArm64]
 
 description: "kwasm core: validated WebAssembly modules and the suspendable interpreter."
 

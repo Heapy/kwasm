@@ -122,11 +122,6 @@ jobs:
               :bindgen-runtime:macosArm64Test
               :tck:macosArm64Test
 
-          - name: macOS x64 tests
-            runner: macos-15-intel
-            tasks: >-
-              :core:macosX64Test
-
           - name: iOS simulator arm64 tests
             runner: macos-15
             tasks: >-
