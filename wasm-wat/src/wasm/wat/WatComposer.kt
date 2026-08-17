@@ -470,7 +470,7 @@ public class WatComposer(private val module: Node) {
             }
             items.getOrNull(i) is Node -> {
                 // folded offset expression
-                mode = DataModeSpec.Active(listOf(items[i] as Sexpr)); i++
+                mode = DataModeSpec.Active(listOf(items[i])); i++
             }
             items.getOrNull(i) is Sym && (items[i] as Sym).text == "passive" -> {
                 mode = DataModeSpec.Passive; i++
