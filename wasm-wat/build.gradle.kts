@@ -7,7 +7,7 @@ plugins {
 
 kotlin {
     jvmToolchain(17)
-    androidLibrary {
+    android {
         namespace = "io.heapy.kwasm.wat"
         compileSdk = 36
         minSdk = 26
