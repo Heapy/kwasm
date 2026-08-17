@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinMetadataTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompileCommon
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -45,6 +47,17 @@ kotlin {
         }
         jvmTest {
             kotlin.srcDir("jvmTest")
+        }
+    }
+}
+
+kotlin.targets.withType<KotlinMetadataTarget>().configureEach {
+    compilations.configureEach {
+        if (name == "commonMain") {
+            compileTaskProvider.configure {
+                @Suppress("DEPRECATION")
+                (this as KotlinCompileCommon).moduleName.set("kwasm-core_commonMain")
+            }
         }
     }
 }
