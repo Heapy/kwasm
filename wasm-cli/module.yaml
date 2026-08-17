@@ -5,6 +5,7 @@ description: WebAssembly CLI and spec-test runner.
 dependencies:
   - ../wasm-core
   - ../wasm-wat
+  - org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0
 
 settings:
   jvm:
