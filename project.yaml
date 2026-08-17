@@ -1,4 +1,4 @@
 modules:
+  - ./wasm-cli
   - ./wasm-core
   - ./wasm-wat
-  - ./wasm-cli
