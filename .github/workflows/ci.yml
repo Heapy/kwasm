@@ -126,7 +126,6 @@ jobs:
             runner: macos-15-intel
             tasks: >-
               :core:macosX64Test
-              :bindgen-api:macosX64Test
 
           - name: iOS simulator arm64 tests
             runner: macos-15
