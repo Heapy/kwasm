@@ -176,6 +176,19 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: "true"
 
+      - name: Acknowledge experimental Native Image report option
+        shell: bash
+        run: |
+          set -euo pipefail
+          config_file="${NATIVE_IMAGE_CONFIG_FILE:?setup-graalvm did not configure Native Image reports}"
+          if ! grep -Fq -- '-H:BuildOutputJSONFile=' "$config_file"; then
+            echo "setup-graalvm did not configure the Native Image build report" >&2
+            exit 1
+          fi
+          sed -i \
+            's|^NativeImageArgs = \(.*\)$|NativeImageArgs = -H:+UnlockExperimentalVMOptions \1 -H:-UnlockExperimentalVMOptions|' \
+            "$config_file"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.2.0
 
