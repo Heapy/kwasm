@@ -7,9 +7,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.math.*
 
-private const val PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED: Long = -2L
-private const val PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L
-private const val PLANNED_COMPARE_BRANCH_TAKEN_DEPTH_MASK: Long = 0xFFFF_FFFFL
+private const val HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED: Long = -2L
+private const val HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L
+private const val HOISTED_COMPARE_BRANCH_TAKEN_DEPTH_MASK: Long = 0xFFFF_FFFFL
+private const val PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT: Int = 4
 
 /**
  * Suspendable interpreter whose value stack, call frames, and control frames
@@ -408,7 +409,7 @@ public class Interpreter : ResumableMachine {
             ) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
-                        val outcome = evaluatePlannedProducersCompareBrIf(
+                        val outcome = evaluatePlannedProducersCompareBrIfHoisted(
                             frame,
                             locals,
                             localsBase,
@@ -416,8 +417,8 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
-                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
+                        HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             pc += plannedInstructionCount
                             continue
                         }
@@ -567,7 +568,7 @@ public class Interpreter : ResumableMachine {
             if (canExecutePlannedInstruction) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
-                        val outcome = evaluatePlannedProducersCompareBrIf(
+                        val outcome = evaluatePlannedProducersCompareBrIfHoisted(
                             frame,
                             locals,
                             localsBase,
@@ -575,8 +576,8 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
-                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
+                        HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             instructionsUntilCheckpoint -= plannedInstructionCount
                             pc += plannedInstructionCount
                             continue
@@ -703,7 +704,7 @@ public class Interpreter : ResumableMachine {
      * leaving the two negative sentinel outcomes distinct even for malformed
      * negative depths.
      */
-    private fun evaluatePlannedProducersCompareBrIf(
+    private fun evaluatePlannedProducersCompareBrIfHoisted(
         frame: GuestCallFrame,
         locals: RuntimeValueStack,
         localsBase: Int,
@@ -727,13 +728,13 @@ public class Interpreter : ResumableMachine {
                 targetIndex in frame.controls.indices &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
-                return PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED
+                return HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED
             }
         }
         return if (shouldBranch) {
-            branchInstruction.depth.toLong() and PLANNED_COMPARE_BRANCH_TAKEN_DEPTH_MASK
+            branchInstruction.depth.toLong() and HOISTED_COMPARE_BRANCH_TAKEN_DEPTH_MASK
         } else {
-            PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH
+            HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH
         }
     }
 
@@ -784,32 +785,26 @@ public class Interpreter : ResumableMachine {
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
                     store.config.limits.maxValueStackSlots
             ) {
-                if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                    when (
-                        val outcome = evaluatePlannedProducersCompareBrIf(
-                            frame,
-                            store.localStack,
-                            frame.localsBase,
-                            body,
-                            pc,
-                        )
+                if (
+                    superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
+                    executePlannedProducersCompareBrIfOriginal(
+                        store,
+                        frame,
+                        control,
+                        body,
+                        pc,
+                    )
+                ) {
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
                     ) {
-                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
-                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
-                            control.pc = pc + plannedInstructionCount(superInstruction)
-                            store.ensureValueStackLimit()
-                            continue
-                        }
-                        else -> {
-                            control.pc = pc + plannedInstructionCount(superInstruction)
-                            check(!branch(store, frame, outcome.toInt())) {
-                                "non-loop planned branch unexpectedly requested a checkpoint"
-                            }
-                            store.ensureValueStackLimit()
-                            return
-                        }
+                        return
                     }
+                    continue
                 } else if (
+                    superInstruction != LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
                     executePlannedSuperInstructionOriginal(
                         store,
                         frame,
@@ -906,33 +901,24 @@ public class Interpreter : ResumableMachine {
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
                     store.config.limits.maxValueStackSlots
             if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                if (canExecutePlannedInstruction) {
-                    when (
-                        val outcome = evaluatePlannedProducersCompareBrIf(
-                            frame,
-                            store.localStack,
-                            frame.localsBase,
-                            body,
-                            pc,
-                        )
+                if (
+                    canExecutePlannedInstruction &&
+                    executePlannedProducersCompareBrIfUnmeteredOriginal(
+                        store,
+                        frame,
+                        control,
+                        body,
+                        pc,
+                    )
+                ) {
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
                     ) {
-                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
-                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
-                            store.instructionsUntilCheckpoint -= plannedInstructionCount
-                            control.pc = pc + plannedInstructionCount
-                            store.ensureValueStackLimit()
-                            continue
-                        }
-                        else -> {
-                            store.instructionsUntilCheckpoint -= plannedInstructionCount
-                            control.pc = pc + plannedInstructionCount
-                            check(!branch(store, frame, outcome.toInt())) {
-                                "non-loop planned branch unexpectedly requested a checkpoint"
-                            }
-                            store.ensureValueStackLimit()
-                            return LinearHotLoopResult.Complete
-                        }
+                        return LinearHotLoopResult.Complete
                     }
+                    continue
                 }
             } else if (
                 canExecutePlannedInstruction &&
@@ -995,6 +981,92 @@ public class Interpreter : ResumableMachine {
             store.ensureValueStackLimit()
         }
         return LinearHotLoopResult.Complete
+    }
+
+    /**
+     * Managed-runtime variant kept deliberately direct: it performs the
+     * comparison and any non-loop transfer before returning a handled flag.
+     */
+    private fun executePlannedProducersCompareBrIfOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        body: List<Instr>,
+        pc: Int,
+    ): Boolean {
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        val operation = body[pc + 2] as Simple
+        val branchInstruction = body[pc + 3] as BrIf
+        val locals = store.localStack
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
+        if (shouldBranch) {
+            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
+            if (
+                targetIndex in frame.controls.indices &&
+                frame.controls[targetIndex].kind == ControlKind.Loop
+            ) {
+                return false
+            }
+        }
+
+        control.pc = pc + PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
+        if (shouldBranch) {
+            check(!branch(store, frame, branchInstruction.depth)) {
+                "non-loop planned branch unexpectedly requested a checkpoint"
+            }
+        }
+        return true
+    }
+
+    /**
+     * Checkpoint-enabled managed variant. Publishing the charged countdown
+     * and next PC before branching keeps listener- and trap-visible state
+     * consistent with four scalar instructions.
+     */
+    private fun executePlannedProducersCompareBrIfUnmeteredOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        body: List<Instr>,
+        pc: Int,
+    ): Boolean {
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        val operation = body[pc + 2] as Simple
+        val branchInstruction = body[pc + 3] as BrIf
+        val locals = store.localStack
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
+        if (shouldBranch) {
+            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
+            if (
+                targetIndex in frame.controls.indices &&
+                frame.controls[targetIndex].kind == ControlKind.Loop
+            ) {
+                return false
+            }
+        }
+
+        store.instructionsUntilCheckpoint -= PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
+        control.pc = pc + PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
+        if (shouldBranch) {
+            check(!branch(store, frame, branchInstruction.depth)) {
+                "non-loop planned branch unexpectedly requested a checkpoint"
+            }
+        }
+        return true
     }
 
     /**

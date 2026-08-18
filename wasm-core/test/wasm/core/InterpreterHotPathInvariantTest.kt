@@ -280,6 +280,7 @@ class InterpreterHotPathInvariantTest {
                 }
 
                 assertEquals(TrapKind.UNREACHABLE_PARENT, trap.kind)
+                assertEquals(3, trap.guestStack.single().instructionIndex)
                 assertTrue(
                     trap.message.orEmpty().contains("invalid branch depth $depth"),
                     "$mode depth=$depth message=${trap.message}",
