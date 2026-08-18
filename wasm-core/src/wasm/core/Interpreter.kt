@@ -437,6 +437,7 @@ public class Interpreter : ResumableMachine {
                     if (
                         executePlannedSuperInstruction(
                             instance,
+                            control,
                             stack,
                             locals,
                             localsBase,
@@ -600,6 +601,7 @@ public class Interpreter : ResumableMachine {
                     if (
                         executePlannedSuperInstruction(
                             instance,
+                            control,
                             stack,
                             locals,
                             localsBase,
@@ -808,6 +810,7 @@ public class Interpreter : ResumableMachine {
                     executePlannedSuperInstructionOriginal(
                         store,
                         frame,
+                        control,
                         body,
                         pc,
                         superInstruction,
@@ -925,6 +928,7 @@ public class Interpreter : ResumableMachine {
                 executePlannedSuperInstructionOriginal(
                     store,
                     frame,
+                    control,
                     body,
                     pc,
                     superInstruction,
@@ -1077,11 +1081,13 @@ public class Interpreter : ResumableMachine {
     private fun executePlannedSuperInstructionOriginal(
         store: Store,
         frame: GuestCallFrame,
+        control: GuestControlFrame,
         body: List<Instr>,
         pc: Int,
         plan: Int,
     ): Boolean = executePlannedSuperInstruction(
         frame.instance,
+        control,
         store.valueStack,
         store.localStack,
         frame.localsBase,
@@ -1093,6 +1099,7 @@ public class Interpreter : ResumableMachine {
 
     private fun executePlannedSuperInstruction(
         instance: Instance,
+        control: GuestControlFrame,
         stack: RuntimeValueStack,
         locals: RuntimeValueStack,
         localsBase: Int,
@@ -1127,7 +1134,13 @@ public class Interpreter : ResumableMachine {
                         val right = scratch[--depth]
                         val leftIndex = depth - 1
                         scratch[leftIndex] =
-                            executeI32Binary(instruction.opcode, scratch[leftIndex], right)
+                            executePlannedI32Binary(
+                                control = control,
+                                instructionIndex = index,
+                                opcode = instruction.opcode,
+                                left = scratch[leftIndex],
+                                right = right,
+                            )
                     }
                     else -> error(
                         "opcode 0x${instruction.opcode.toString(16)} " +
@@ -1145,7 +1158,13 @@ public class Interpreter : ResumableMachine {
             val target = body[pc + 1] as FcIndex
             locals.setI32(
                 localsBase + target.index,
-                executeI32Binary(operation.opcode, left, right),
+                executePlannedI32Binary(
+                    control = control,
+                    instructionIndex = pc,
+                    opcode = operation.opcode,
+                    left = left,
+                    right = right,
+                ),
             )
             return true
         }
@@ -1156,7 +1175,13 @@ public class Interpreter : ResumableMachine {
             val right = (body[pc] as I32Const).value
             val operation = body[pc + 1] as Simple
             val result =
-                executeI32Binary(operation.opcode, stack.removeLastI32(), right)
+                executePlannedI32Binary(
+                    control = control,
+                    instructionIndex = pc + 1,
+                    opcode = operation.opcode,
+                    left = stack.removeLastI32(),
+                    right = right,
+                )
             if (plan == LINEAR_PLAN_CONST_BINARY_SET.toInt()) {
                 val target = body[pc + 2] as FcIndex
                 locals.setI32(localsBase + target.index, result)
@@ -1172,10 +1197,12 @@ public class Interpreter : ResumableMachine {
             plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()
         ) {
             val operation = second as Simple
-            val result = executeI32Binary(
-                operation.opcode,
-                stack.removeLastI32(),
-                locals.getI32(localsBase + first.index),
+            val result = executePlannedI32Binary(
+                control = control,
+                instructionIndex = pc + 1,
+                opcode = operation.opcode,
+                left = stack.removeLastI32(),
+                right = locals.getI32(localsBase + first.index),
             )
             if (plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()) {
                 val target = body[pc + 2] as FcIndex
@@ -1207,13 +1234,17 @@ public class Interpreter : ResumableMachine {
             if (secondMemory != null && secondMemory.indexType != IndexType.I32) {
                 return false
             }
-            var result = executePlannedI32Load(
-                firstMemory,
-                firstLoad,
-                locals.getI32(localsBase + first.index),
-            )
+            var result = executeWithPlannedTrapAttribution(control, pc + 1) {
+                executePlannedI32Load(
+                    firstMemory,
+                    firstLoad,
+                    locals.getI32(localsBase + first.index),
+                )
+            }
             if (secondLoad != null) {
-                result = executePlannedI32Load(secondMemory!!, secondLoad, result)
+                result = executeWithPlannedTrapAttribution(control, pc + 2) {
+                    executePlannedI32Load(secondMemory!!, secondLoad, result)
+                }
             }
             when (plan) {
                 LINEAR_PLAN_LOCAL_I32_LOAD_SET.toInt() -> {
@@ -1245,7 +1276,13 @@ public class Interpreter : ResumableMachine {
         } else {
             locals.getI32(localsBase + (second as FcIndex).index)
         }
-        val innerResult = executeI32Binary(operation.opcode, left, right)
+        val innerResult = executePlannedI32Binary(
+            control = control,
+            instructionIndex = pc + 2,
+            opcode = operation.opcode,
+            left = left,
+            right = right,
+        )
         var result = innerResult
         if (
             plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY.toInt() ||
@@ -1255,7 +1292,13 @@ public class Interpreter : ResumableMachine {
         ) {
             val outerLeft = stack.removeLastI32()
             val outerOperation = body[pc + 3] as Simple
-            result = executeI32Binary(outerOperation.opcode, outerLeft, result)
+            result = executePlannedI32Binary(
+                control = control,
+                instructionIndex = pc + 3,
+                opcode = outerOperation.opcode,
+                left = outerLeft,
+                right = result,
+            )
         }
         if (
             plan == LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY.toInt() ||
@@ -1263,7 +1306,13 @@ public class Interpreter : ResumableMachine {
         ) {
             val outerLeft = stack.removeLastI32()
             val outerOperation = body[pc + 4] as Simple
-            result = executeI32Binary(outerOperation.opcode, outerLeft, result)
+            result = executePlannedI32Binary(
+                control = control,
+                instructionIndex = pc + 4,
+                opcode = outerOperation.opcode,
+                left = outerLeft,
+                right = result,
+            )
         }
         when (plan) {
             LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt() -> {
@@ -1281,6 +1330,39 @@ public class Interpreter : ResumableMachine {
             else -> stack.addLastI32(result)
         }
         return true
+    }
+
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun executePlannedI32Binary(
+        control: GuestControlFrame,
+        instructionIndex: Int,
+        opcode: Int,
+        left: Int,
+        right: Int,
+    ): Int =
+        if (opcode in 0x6D..0x70) {
+            executeWithPlannedTrapAttribution(control, instructionIndex) {
+                executeI32Binary(opcode, left, right)
+            }
+        } else {
+            executeI32Binary(opcode, left, right)
+        }
+
+    /**
+     * A fused operation normally publishes its PCs in one update after the
+     * group completes. A potentially trapping member must instead remain
+     * visible at its exact logical instruction if evaluation throws.
+     */
+    private inline fun <T> executeWithPlannedTrapAttribution(
+        control: GuestControlFrame,
+        instructionIndex: Int,
+        operation: () -> T,
+    ): T {
+        val groupStart = control.pc
+        control.pc = instructionIndex + 1
+        val result = operation()
+        control.pc = groupStart
+        return result
     }
 
     private fun plannedInstructionCount(plan: Int): Int = when (plan) {
