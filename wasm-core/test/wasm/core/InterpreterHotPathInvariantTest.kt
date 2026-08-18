@@ -264,6 +264,31 @@ class InterpreterHotPathInvariantTest {
     }
 
     @Test
+    fun fusedBranchOutcomePreservesMalformedSignedDepths(): Unit = runBlocking {
+        for (mode in CheckpointMode.entries) {
+            for (depth in listOf(Int.MIN_VALUE, -2, -1, 1, Int.MAX_VALUE)) {
+                val module = unvalidatedFusedFunctionBranchModule(depth)
+                val store = Store(StoreConfig(checkpointMode = mode))
+                assertEquals(
+                    LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF,
+                    store.linearHotCode(module.functions.single().body).plan.first(),
+                )
+
+                val trap = assertFailsWith<ExecutionTrap> {
+                    Instance(store, module, ResolvedImports())
+                        .invoke("branch", listOf(Value.I32(0)))
+                }
+
+                assertEquals(TrapKind.UNREACHABLE_PARENT, trap.kind)
+                assertTrue(
+                    trap.message.orEmpty().contains("invalid branch depth $depth"),
+                    "$mode depth=$depth message=${trap.message}",
+                )
+            }
+        }
+    }
+
+    @Test
     fun reusedControlReplacesBodyAndItsHotCode() {
         val firstBody = listOf<Instr>(I32Const(1))
         val secondBody = plannedExpressionBody()
@@ -846,6 +871,22 @@ class InterpreterHotPathInvariantTest {
         )
         exports += Export("exit", ExportDesc.Function(0))
     }
+
+    private fun unvalidatedFusedFunctionBranchModule(depth: Int): Module =
+        ModuleBuilder().apply {
+            types += FuncType(listOf(ValType.I32), emptyList())
+            functions += Function(
+                typeIndex = 0,
+                locals = emptyList(),
+                body = listOf(
+                    FcIndex(0x20, 0),
+                    I32Const(1),
+                    Simple(0x48),
+                    BrIf(depth),
+                ),
+            )
+            exports += Export("branch", ExportDesc.Function(0))
+        }.build(WASM_HEADER)
 
     private fun moduleReturning(body: List<Instr>): Module = validatedModule {
         types += FuncType(emptyList(), listOf(ValType.I32))

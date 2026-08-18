@@ -7,6 +7,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.math.*
 
+private const val PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED: Long = -2L
+private const val PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L
+private const val PLANNED_COMPARE_BRANCH_TAKEN_DEPTH_MASK: Long = 0xFFFF_FFFFL
+
 /**
  * Suspendable interpreter whose value stack, call frames, and control frames
  * are heap data owned by [Store]. Guest calls never recurse on the host stack.
@@ -23,14 +27,6 @@ public class Interpreter : ResumableMachine {
         Complete,
         RequiresSlowCheckpointBeforeInstruction,
         RequiresSlowCheckpointAfterInstruction,
-    }
-
-    private sealed interface PlannedCompareBranchOutcome {
-        data object NotFused : PlannedCompareBranchOutcome
-
-        data object Fallthrough : PlannedCompareBranchOutcome
-
-        data class Taken(val depth: Int) : PlannedCompareBranchOutcome
     }
 
     override suspend fun invoke(
@@ -420,14 +416,14 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PlannedCompareBranchOutcome.NotFused -> Unit
-                        PlannedCompareBranchOutcome.Fallthrough -> {
+                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             pc += plannedInstructionCount
                             continue
                         }
-                        is PlannedCompareBranchOutcome.Taken -> {
+                        else -> {
                             control.pc = pc + plannedInstructionCount
-                            check(!branch(store, frame, outcome.depth)) {
+                            check(!branch(store, frame, outcome.toInt())) {
                                 "non-loop planned branch unexpectedly requested a checkpoint"
                             }
                             return
@@ -579,17 +575,17 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PlannedCompareBranchOutcome.NotFused -> Unit
-                        PlannedCompareBranchOutcome.Fallthrough -> {
+                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             instructionsUntilCheckpoint -= plannedInstructionCount
                             pc += plannedInstructionCount
                             continue
                         }
-                        is PlannedCompareBranchOutcome.Taken -> {
+                        else -> {
                             instructionsUntilCheckpoint -= plannedInstructionCount
                             control.pc = pc + plannedInstructionCount
                             store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
-                            check(!branch(store, frame, outcome.depth)) {
+                            check(!branch(store, frame, outcome.toInt())) {
                                 "non-loop planned branch unexpectedly requested a checkpoint"
                             }
                             return LinearHotLoopResult.Complete
@@ -702,7 +698,10 @@ public class Interpreter : ResumableMachine {
      * publish observable PC and checkpoint state before a taken branch invokes
      * an embedder listener. Loop back-edges alone request a post-branch
      * checkpoint, so they fall back before advancing the PC; their validated
-     * comparison is side-effect-free and may be evaluated again there.
+     * comparison is side-effect-free and may be evaluated again there. Taken
+     * depths use the non-negative unsigned representation of all 32 Int bits,
+     * leaving the two negative sentinel outcomes distinct even for malformed
+     * negative depths.
      */
     private fun evaluatePlannedProducersCompareBrIf(
         frame: GuestCallFrame,
@@ -710,7 +709,7 @@ public class Interpreter : ResumableMachine {
         localsBase: Int,
         body: List<Instr>,
         pc: Int,
-    ): PlannedCompareBranchOutcome {
+    ): Long {
         val first = body[pc] as FcIndex
         val second = body[pc + 1]
         val operation = body[pc + 2] as Simple
@@ -728,13 +727,13 @@ public class Interpreter : ResumableMachine {
                 targetIndex in frame.controls.indices &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
-                return PlannedCompareBranchOutcome.NotFused
+                return PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED
             }
         }
         return if (shouldBranch) {
-            PlannedCompareBranchOutcome.Taken(branchInstruction.depth)
+            branchInstruction.depth.toLong() and PLANNED_COMPARE_BRANCH_TAKEN_DEPTH_MASK
         } else {
-            PlannedCompareBranchOutcome.Fallthrough
+            PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH
         }
     }
 
@@ -795,15 +794,15 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PlannedCompareBranchOutcome.NotFused -> Unit
-                        PlannedCompareBranchOutcome.Fallthrough -> {
+                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             control.pc = pc + plannedInstructionCount(superInstruction)
                             store.ensureValueStackLimit()
                             continue
                         }
-                        is PlannedCompareBranchOutcome.Taken -> {
+                        else -> {
                             control.pc = pc + plannedInstructionCount(superInstruction)
-                            check(!branch(store, frame, outcome.depth)) {
+                            check(!branch(store, frame, outcome.toInt())) {
                                 "non-loop planned branch unexpectedly requested a checkpoint"
                             }
                             store.ensureValueStackLimit()
@@ -917,17 +916,17 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        PlannedCompareBranchOutcome.NotFused -> Unit
-                        PlannedCompareBranchOutcome.Fallthrough -> {
+                        PLANNED_COMPARE_BRANCH_OUTCOME_NOT_FUSED -> Unit
+                        PLANNED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH -> {
                             store.instructionsUntilCheckpoint -= plannedInstructionCount
                             control.pc = pc + plannedInstructionCount
                             store.ensureValueStackLimit()
                             continue
                         }
-                        is PlannedCompareBranchOutcome.Taken -> {
+                        else -> {
                             store.instructionsUntilCheckpoint -= plannedInstructionCount
                             control.pc = pc + plannedInstructionCount
-                            check(!branch(store, frame, outcome.depth)) {
+                            check(!branch(store, frame, outcome.toInt())) {
                                 "non-loop planned branch unexpectedly requested a checkpoint"
                             }
                             store.ensureValueStackLimit()
