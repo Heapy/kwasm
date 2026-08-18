@@ -5,6 +5,7 @@ import io.heapy.kwasm.Instr.BrIf
 import io.heapy.kwasm.Instr.Call
 import io.heapy.kwasm.Instr.FcIndex
 import io.heapy.kwasm.Instr.I32Const
+import io.heapy.kwasm.Instr.I64Const
 import io.heapy.kwasm.Instr.Loop
 import io.heapy.kwasm.Instr.Simple
 import kotlinx.coroutines.CompletableDeferred
@@ -16,8 +17,8 @@ import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -347,6 +348,146 @@ class InterpreterHotPathInvariantTest {
         assertEquals(Long.MIN_VALUE, generic.removeLastI64())
         assertEquals(Int.MAX_VALUE, generic.removeLastI32())
         assertEquals(Int.MIN_VALUE, generic.removeLastI32())
+    }
+
+    @Test
+    fun localProgramCounterTracksLoopBackedges(): Unit = runBlocking {
+        val module = validatedModule {
+            types += FuncType(emptyList(), listOf(ValType.I32))
+            functions += Function(
+                typeIndex = 0,
+                locals = listOf(ValType.I32),
+                body = listOf(
+                    I32Const(3),
+                    FcIndex(0x21, 0),
+                    Loop(
+                        BlockType.Empty,
+                        listOf(
+                            FcIndex(0x20, 0),
+                            I32Const(1),
+                            Simple(0x6B),
+                            FcIndex(0x22, 0),
+                            BrIf(0),
+                        ),
+                    ),
+                    FcIndex(0x20, 0),
+                ),
+            )
+            exports += Export("countdown", ExportDesc.Function(0))
+        }
+
+        for (mode in CheckpointMode.entries) {
+            val instance = Instance(
+                Store(StoreConfig(checkpointMode = mode)),
+                module,
+                ResolvedImports(),
+            )
+            assertEquals(listOf(Value.I32(0)), instance.invoke("countdown"))
+        }
+    }
+
+    @Test
+    fun trapAfterLocallyAdvancedProgramCounterReportsCurrentInstruction(): Unit = runBlocking {
+        val module = validatedModule {
+            types += FuncType(emptyList(), listOf(ValType.I64))
+            functions += Function(
+                typeIndex = 0,
+                locals = emptyList(),
+                body = listOf(I64Const(12), I64Const(0), Simple(0x7F)),
+            )
+            exports += Export("divide", ExportDesc.Function(0))
+        }
+        val trap = assertFailsWith<ExecutionTrap> {
+            Instance(module).invoke("divide")
+        }
+
+        assertEquals(TrapKind.INTEGER_DIVIDE_BY_ZERO, trap.kind)
+        assertEquals(2, trap.guestStack.single().instructionIndex)
+    }
+
+    @Test
+    fun pausedCheckpointPublishesProgramCounterAndCountdownForSnapshotResume(): Unit = runBlocking {
+        val module = moduleReturning(
+            listOf(
+                I32Const(1),
+                I32Const(2),
+                Simple(0x6A),
+                I32Const(4),
+                Simple(0x6A),
+            ),
+        )
+        lateinit var pause: PauseHandle
+        var pauseRequested = false
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = 2,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        if (!pauseRequested && instructionIndex == 0) {
+                            pauseRequested = true
+                            pause = store.requestPause()
+                        }
+                    }
+                },
+            ),
+        )
+        val instance = Instance(store, module, ResolvedImports())
+        val invocation = async { instance.invoke("value") }
+
+        withTimeout(5_000) { store.awaitSnapshotCapturable() }
+        val snapshot = store.captureSnapshotState(instance)
+        assertEquals(1, snapshot.frames.single().controls.single().pc)
+        assertEquals(0, snapshot.instructionsUntilCheckpoint)
+        assertEquals(listOf(Value.I32(1)), snapshot.valueStack())
+
+        pause.resume()
+        assertEquals(listOf(Value.I32(7)), invocation.await())
+
+        val restoredStore = Store(StoreConfig(checkpointInterval = 2))
+        val restored = Instance(restoredStore, module, ResolvedImports())
+        restoredStore.restoreSnapshotState(restored, snapshot)
+        assertEquals(listOf(Value.I32(7)), restored.resume())
+    }
+
+    @Test
+    fun importedCallAfterLinearInstructionsRunsExactlyOnce(): Unit = runBlocking {
+        val importType = FuncType(listOf(ValType.I32), listOf(ValType.I32))
+        val module = validatedModule {
+            types += importType
+            types += FuncType(emptyList(), listOf(ValType.I32))
+            imports += Import("host", "increment", ImportDesc.Function(0))
+            functions += Function(
+                typeIndex = 1,
+                locals = emptyList(),
+                body = listOf(
+                    I32Const(40),
+                    I32Const(1),
+                    Simple(0x6A),
+                    Call(0),
+                ),
+            )
+            exports += Export("value", ExportDesc.Function(1))
+        }
+        var calls = 0
+        val instance = Instance(
+            Store(),
+            module,
+            ResolvedImports(
+                functions = listOf(
+                    HostImport(importType) { arguments ->
+                        calls++
+                        listOf(Value.I32(arguments.single().asI32() + 1))
+                    },
+                ),
+            ),
+        )
+
+        assertEquals(listOf(Value.I32(42)), instance.invoke("value"))
+        assertEquals(1, calls)
     }
 
     private fun assertHotCodeIsAligned(body: List<Instr>, hotCode: LinearHotCode) {

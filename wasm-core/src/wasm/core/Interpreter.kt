@@ -178,7 +178,15 @@ public class Interpreter : ResumableMachine {
             val instruction = control.body[control.pc]
             control.pc++
             try {
-                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                when (
+                    executeNonSuspendingHotInstruction(
+                        store,
+                        frame,
+                        instruction,
+                        frame.instance,
+                        store.valueStack,
+                    )
+                ) {
                     FastInstructionResult.Handled -> Unit
                     FastInstructionResult.NotHandled ->
                         executeInstruction(store, frame, instruction)
@@ -249,7 +257,15 @@ public class Interpreter : ResumableMachine {
             }
             control.pc++
             try {
-                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                when (
+                    executeNonSuspendingHotInstruction(
+                        store,
+                        frame,
+                        instruction,
+                        frame.instance,
+                        store.valueStack,
+                    )
+                ) {
                     FastInstructionResult.Handled -> Unit
                     FastInstructionResult.NotHandled ->
                         executeInstruction(store, frame, instruction)
@@ -287,7 +303,15 @@ public class Interpreter : ResumableMachine {
             )
             control.pc++
             try {
-                when (executeNonSuspendingHotInstruction(store, frame, instruction)) {
+                when (
+                    executeNonSuspendingHotInstruction(
+                        store,
+                        frame,
+                        instruction,
+                        frame.instance,
+                        store.valueStack,
+                    )
+                ) {
                     FastInstructionResult.Handled -> Unit
                     FastInstructionResult.NotHandled ->
                         executeInstruction(store, frame, instruction)
@@ -316,12 +340,21 @@ public class Interpreter : ResumableMachine {
         frame: GuestCallFrame,
         control: GuestControlFrame,
     ) {
-        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        val config = store.config
+        val canonicalizeNaNs = config.canonicalizeNaNs
+        val maxValueStackSlots = config.limits.maxValueStackSlots
         val body = control.body
+        val bodySize = body.size
         val linearHotCode = control.linearHotCode
+        val plan = linearHotCode.plan
         val packedInstructions = linearHotCode.packedInstructions
-        while (control.pc < body.size) {
-            val pc = control.pc
+        val stack = store.valueStack
+        val locals = store.localStack
+        val i32ExpressionScratch = store.i32ExpressionScratch
+        val localsBase = frame.localsBase
+        val instance = frame.instance
+        var pc = control.pc
+        while (pc < bodySize) {
             val instruction = if (packedInstructions == null) body[pc] else null
             val packedInstruction =
                 if (packedInstructions == null) 0L else packedInstructions[pc]
@@ -339,73 +372,114 @@ public class Interpreter : ResumableMachine {
                 opcode != 0x1B &&
                 opcode != 0x1C
             ) {
+                control.pc = pc
                 return
             }
             if (
                 opcode == 0x10 &&
-                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
+                instance.isImportedFunction((body[pc] as Call).funcIndex)
             ) {
+                control.pc = pc
                 return
             }
-            val superInstruction = linearHotCode.plan[pc].toInt()
+            val superInstruction = plan[pc].toInt()
+            val plannedInstructionCount = plannedInstructionCount(superInstruction)
             if (
                 superInstruction != 0 &&
-                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots
+                stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             ) {
-                if (
-                    superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
-                    executePlannedProducersCompareBrIf(store, frame, control, body, pc)
-                ) {
-                    store.ensureValueStackLimit()
+                // Preserve the pre-existing trap location for a planned group.
+                // Plans containing division or memory operations can trap;
+                // the fused branch can transfer control.
+                control.pc = pc
+                if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
-                        store.frames.lastOrNull() !== frame ||
-                        frame.controls.lastOrNull() !== control
+                        executePlannedProducersCompareBrIf(
+                            store,
+                            frame,
+                            control,
+                            locals,
+                            localsBase,
+                            body,
+                            pc,
+                        )
                     ) {
-                        return
+                        if (stack.size > maxValueStackSlots) {
+                            store.ensureValueStackLimit()
+                        }
+                        if (
+                            store.frames.lastOrNull() !== frame ||
+                            frame.controls.lastOrNull() !== control
+                        ) {
+                            return
+                        }
+                        pc = control.pc
+                        continue
                     }
-                    continue
                 } else if (
-                    superInstruction != LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
                     executePlannedSuperInstruction(
-                        store,
-                        frame,
+                        instance,
+                        stack,
+                        locals,
+                        localsBase,
+                        i32ExpressionScratch,
                         body,
                         pc,
                         superInstruction,
                     )
                 ) {
-                    control.pc += plannedInstructionCount(superInstruction)
-                    store.ensureValueStackLimit()
+                    pc += plannedInstructionCount
+                    if (stack.size > maxValueStackSlots) {
+                        control.pc = pc
+                        store.ensureValueStackLimit()
+                    }
                     continue
                 }
             }
-            control.pc++
+            val nextPc = pc + 1
             if (
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
-                executeNonSuspendingHotInstruction(store, frame, instruction ?: body[pc])
+                control.pc = nextPc
+                executeNonSuspendingHotInstruction(
+                    store,
+                    frame,
+                    instruction ?: body[pc],
+                    instance,
+                    stack,
+                )
                 if (
                     store.frames.lastOrNull() !== frame ||
                     frame.controls.lastOrNull() !== control
                 ) {
                     return
                 }
+                pc = control.pc
             } else {
+                if (linearHotInstructionMayTrap(opcode)) control.pc = nextPc
                 executeLinearHotInstruction(
                     store,
                     frame,
+                    stack,
+                    locals,
+                    localsBase,
+                    instance,
                     opcode,
                     instruction?.linearHotImmediate()
                         ?: (packedInstruction shr 32).toInt(),
                     body,
                     pc,
                 )
+                pc = nextPc
             }
-            if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            if (canonicalizeNaNs) canonicalizeTop(stack)
+            if (stack.size > maxValueStackSlots) {
+                control.pc = pc
+                store.ensureValueStackLimit()
+            }
         }
+        control.pc = pc
     }
 
     /**
@@ -419,13 +493,23 @@ public class Interpreter : ResumableMachine {
         control: GuestControlFrame,
         checkpointCompletedForFirstInstruction: Boolean,
     ): LinearHotLoopResult {
-        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        val config = store.config
+        val canonicalizeNaNs = config.canonicalizeNaNs
+        val maxValueStackSlots = config.limits.maxValueStackSlots
         val body = control.body
+        val bodySize = body.size
         val linearHotCode = control.linearHotCode
+        val plan = linearHotCode.plan
         val packedInstructions = linearHotCode.packedInstructions
+        val stack = store.valueStack
+        val locals = store.localStack
+        val i32ExpressionScratch = store.i32ExpressionScratch
+        val localsBase = frame.localsBase
+        val instance = frame.instance
+        var pc = control.pc
+        var instructionsUntilCheckpoint = store.instructionsUntilCheckpoint
         var checkpointCompleted = checkpointCompletedForFirstInstruction
-        while (control.pc < body.size) {
-            val pc = control.pc
+        while (pc < bodySize) {
             val instruction = if (packedInstructions == null) body[pc] else null
             val packedInstruction =
                 if (packedInstructions == null) 0L else packedInstructions[pc]
@@ -443,70 +527,108 @@ public class Interpreter : ResumableMachine {
                 opcode != 0x1B &&
                 opcode != 0x1C
             ) {
+                control.pc = pc
+                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 return LinearHotLoopResult.Complete
             }
             if (
                 opcode == 0x10 &&
-                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
+                instance.isImportedFunction((body[pc] as Call).funcIndex)
             ) {
+                control.pc = pc
+                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 return LinearHotLoopResult.Complete
             }
-            val superInstruction = linearHotCode.plan[pc].toInt()
+            val superInstruction = plan[pc].toInt()
             val plannedInstructionCount = plannedInstructionCount(superInstruction)
             val canExecutePlannedInstruction =
                 !checkpointCompleted &&
                 superInstruction != 0 &&
-                store.instructionsUntilCheckpoint > plannedInstructionCount &&
-                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots
-            if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                if (
-                    canExecutePlannedInstruction &&
-                    executePlannedProducersCompareBrIf(store, frame, control, body, pc)
-                ) {
-                    store.instructionsUntilCheckpoint -= plannedInstructionCount
-                    store.ensureValueStackLimit()
+                instructionsUntilCheckpoint > plannedInstructionCount &&
+                stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
+            if (canExecutePlannedInstruction) {
+                // Preserve the pre-existing trap location and countdown for a
+                // planned group, which can trap or transfer control.
+                control.pc = pc
+                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
-                        store.frames.lastOrNull() !== frame ||
-                        frame.controls.lastOrNull() !== control
+                        executePlannedProducersCompareBrIf(
+                            store,
+                            frame,
+                            control,
+                            locals,
+                            localsBase,
+                            body,
+                            pc,
+                        )
                     ) {
-                        return LinearHotLoopResult.Complete
+                        instructionsUntilCheckpoint -= plannedInstructionCount
+                        store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                        if (stack.size > maxValueStackSlots) {
+                            store.ensureValueStackLimit()
+                        }
+                        if (
+                            store.frames.lastOrNull() !== frame ||
+                            frame.controls.lastOrNull() !== control
+                        ) {
+                            return LinearHotLoopResult.Complete
+                        }
+                        pc = control.pc
+                        continue
+                    }
+                } else if (
+                    executePlannedSuperInstruction(
+                        instance,
+                        stack,
+                        locals,
+                        localsBase,
+                        i32ExpressionScratch,
+                        body,
+                        pc,
+                        superInstruction,
+                    )
+                ) {
+                    instructionsUntilCheckpoint -= plannedInstructionCount
+                    pc += plannedInstructionCount
+                    if (stack.size > maxValueStackSlots) {
+                        control.pc = pc
+                        store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                        store.ensureValueStackLimit()
                     }
                     continue
                 }
-            } else if (
-                canExecutePlannedInstruction &&
-                executePlannedSuperInstruction(
-                    store,
-                    frame,
-                    body,
-                    pc,
-                    superInstruction,
-                )
-            ) {
-                store.instructionsUntilCheckpoint -= plannedInstructionCount
-                control.pc += plannedInstructionCount
-                store.ensureValueStackLimit()
-                continue
             }
             if (checkpointCompleted) {
                 checkpointCompleted = false
             } else {
-                store.instructionsUntilCheckpoint--
+                instructionsUntilCheckpoint--
                 if (
-                    (opcode == 0x10 || store.instructionsUntilCheckpoint <= 0) &&
-                    checkpointRequiresSlowCheckpoint(store)
+                    opcode == 0x10 || instructionsUntilCheckpoint <= 0
                 ) {
-                    return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+                    control.pc = pc
+                    store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                    if (checkpointRequiresSlowCheckpoint(store)) {
+                        return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+                    }
+                    instructionsUntilCheckpoint = store.instructionsUntilCheckpoint
                 }
             }
-            control.pc++
+            val nextPc = pc + 1
             if (
                 opcode in 0x02..0x04 ||
                 opcode in 0x0C..0x10
             ) {
+                control.pc = nextPc
+                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 val result =
-                    executeNonSuspendingHotInstruction(store, frame, instruction ?: body[pc])
+                    executeNonSuspendingHotInstruction(
+                        store,
+                        frame,
+                        instruction ?: body[pc],
+                        instance,
+                        stack,
+                    )
                 if (result == FastInstructionResult.RequiresSlowCheckpoint) {
                     return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
                 }
@@ -516,20 +638,37 @@ public class Interpreter : ResumableMachine {
                 ) {
                     return LinearHotLoopResult.Complete
                 }
+                pc = control.pc
+                instructionsUntilCheckpoint = store.instructionsUntilCheckpoint
             } else {
+                if (linearHotInstructionMayTrap(opcode)) {
+                    control.pc = nextPc
+                    store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                }
                 executeLinearHotInstruction(
                     store,
                     frame,
+                    stack,
+                    locals,
+                    localsBase,
+                    instance,
                     opcode,
                     instruction?.linearHotImmediate()
                         ?: (packedInstruction shr 32).toInt(),
                     body,
                     pc,
                 )
+                pc = nextPc
             }
-            if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            if (canonicalizeNaNs) canonicalizeTop(stack)
+            if (stack.size > maxValueStackSlots) {
+                control.pc = pc
+                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                store.ensureValueStackLimit()
+            }
         }
+        control.pc = pc
+        store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
         return LinearHotLoopResult.Complete
     }
 
@@ -544,6 +683,8 @@ public class Interpreter : ResumableMachine {
         store: Store,
         frame: GuestCallFrame,
         control: GuestControlFrame,
+        locals: RuntimeValueStack,
+        localsBase: Int,
         body: List<Instr>,
         pc: Int,
     ): Boolean {
@@ -551,12 +692,11 @@ public class Interpreter : ResumableMachine {
         val second = body[pc + 1]
         val operation = body[pc + 2] as Simple
         val branchInstruction = body[pc + 3] as BrIf
-        val locals = store.localStack
-        val left = locals.getI32(frame.localsBase + first.index)
+        val left = locals.getI32(localsBase + first.index)
         val right = if (second is I32Const) {
             second.value
         } else {
-            locals.getI32(frame.localsBase + (second as FcIndex).index)
+            locals.getI32(localsBase + (second as FcIndex).index)
         }
         val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
         if (shouldBranch) {
@@ -586,17 +726,17 @@ public class Interpreter : ResumableMachine {
      * can fall inside these three logical instructions.
      */
     private fun executePlannedSuperInstruction(
-        store: Store,
-        frame: GuestCallFrame,
+        instance: Instance,
+        stack: RuntimeValueStack,
+        locals: RuntimeValueStack,
+        localsBase: Int,
+        scratch: IntArray,
         body: List<Instr>,
         pc: Int,
         plan: Int,
     ): Boolean {
-        val stack = store.valueStack
-        val locals = store.localStack
         if (plan > LINEAR_PLAN_I32_EXPRESSION_OFFSET) {
             val count = plan - LINEAR_PLAN_I32_EXPRESSION_OFFSET
-            val scratch = store.i32ExpressionScratch
             var depth = 0
             for (index in pc until pc + count) {
                 when (val instruction = body[index]) {
@@ -604,11 +744,11 @@ public class Interpreter : ResumableMachine {
                     is FcIndex -> when (instruction.opcode) {
                         0x20 -> {
                             scratch[depth++] =
-                                locals.getI32(frame.localsBase + instruction.index)
+                                locals.getI32(localsBase + instruction.index)
                         }
                         0x21 -> {
                             locals.setI32(
-                                frame.localsBase + instruction.index,
+                                localsBase + instruction.index,
                                 scratch[--depth],
                             )
                         }
@@ -638,7 +778,7 @@ public class Interpreter : ResumableMachine {
             val left = stack.removeLastI32()
             val target = body[pc + 1] as FcIndex
             locals.setI32(
-                frame.localsBase + target.index,
+                localsBase + target.index,
                 executeI32Binary(operation.opcode, left, right),
             )
             return true
@@ -653,7 +793,7 @@ public class Interpreter : ResumableMachine {
                 executeI32Binary(operation.opcode, stack.removeLastI32(), right)
             if (plan == LINEAR_PLAN_CONST_BINARY_SET.toInt()) {
                 val target = body[pc + 2] as FcIndex
-                locals.setI32(frame.localsBase + target.index, result)
+                locals.setI32(localsBase + target.index, result)
             } else {
                 stack.addLastI32(result)
             }
@@ -669,11 +809,11 @@ public class Interpreter : ResumableMachine {
             val result = executeI32Binary(
                 operation.opcode,
                 stack.removeLastI32(),
-                locals.getI32(frame.localsBase + first.index),
+                locals.getI32(localsBase + first.index),
             )
             if (plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()) {
                 val target = body[pc + 2] as FcIndex
-                locals.setI32(frame.localsBase + target.index, result)
+                locals.setI32(localsBase + target.index, result)
             } else {
                 stack.addLastI32(result)
             }
@@ -688,7 +828,7 @@ public class Interpreter : ResumableMachine {
             plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt()
         ) {
             val firstLoad = second as Load
-            val firstMemory = frame.instance.memories[firstLoad.memoryIndex]
+            val firstMemory = instance.memories[firstLoad.memoryIndex]
             if (firstMemory.indexType != IndexType.I32) return false
             val nested =
                 plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD.toInt() ||
@@ -696,7 +836,7 @@ public class Interpreter : ResumableMachine {
                     plan == LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt()
             val secondLoad = if (nested) body[pc + 2] as Load else null
             val secondMemory = secondLoad?.let {
-                frame.instance.memories[it.memoryIndex]
+                instance.memories[it.memoryIndex]
             }
             if (secondMemory != null && secondMemory.indexType != IndexType.I32) {
                 return false
@@ -704,7 +844,7 @@ public class Interpreter : ResumableMachine {
             var result = executePlannedI32Load(
                 firstMemory,
                 firstLoad,
-                locals.getI32(frame.localsBase + first.index),
+                locals.getI32(localsBase + first.index),
             )
             if (secondLoad != null) {
                 result = executePlannedI32Load(secondMemory!!, secondLoad, result)
@@ -712,20 +852,20 @@ public class Interpreter : ResumableMachine {
             when (plan) {
                 LINEAR_PLAN_LOCAL_I32_LOAD_SET.toInt() -> {
                     val target = body[pc + 2] as FcIndex
-                    locals.setI32(frame.localsBase + target.index, result)
+                    locals.setI32(localsBase + target.index, result)
                 }
                 LINEAR_PLAN_LOCAL_I32_LOAD_TEE.toInt() -> {
                     val target = body[pc + 2] as FcIndex
-                    locals.setI32(frame.localsBase + target.index, result)
+                    locals.setI32(localsBase + target.index, result)
                     stack.addLastI32(result)
                 }
                 LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt() -> {
                     val target = body[pc + 3] as FcIndex
-                    locals.setI32(frame.localsBase + target.index, result)
+                    locals.setI32(localsBase + target.index, result)
                 }
                 LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt() -> {
                     val target = body[pc + 3] as FcIndex
-                    locals.setI32(frame.localsBase + target.index, result)
+                    locals.setI32(localsBase + target.index, result)
                     stack.addLastI32(result)
                 }
                 else -> stack.addLastI32(result)
@@ -733,11 +873,11 @@ public class Interpreter : ResumableMachine {
             return true
         }
         val operation = body[pc + 2] as Simple
-        val left = locals.getI32(frame.localsBase + first.index)
+        val left = locals.getI32(localsBase + first.index)
         val right = if (second is I32Const) {
             second.value
         } else {
-            locals.getI32(frame.localsBase + (second as FcIndex).index)
+            locals.getI32(localsBase + (second as FcIndex).index)
         }
         val innerResult = executeI32Binary(operation.opcode, left, right)
         var result = innerResult
@@ -762,15 +902,15 @@ public class Interpreter : ResumableMachine {
         when (plan) {
             LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt() -> {
                 val target = body[pc + 3] as FcIndex
-                locals.setI32(frame.localsBase + target.index, result)
+                locals.setI32(localsBase + target.index, result)
             }
             LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET.toInt() -> {
                 val target = body[pc + 4] as FcIndex
-                locals.setI32(frame.localsBase + target.index, result)
+                locals.setI32(localsBase + target.index, result)
             }
             LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt() -> {
                 val target = body[pc + 5] as FcIndex
-                locals.setI32(frame.localsBase + target.index, result)
+                locals.setI32(localsBase + target.index, result)
             }
             else -> stack.addLastI32(result)
         }
@@ -909,25 +1049,28 @@ public class Interpreter : ResumableMachine {
     private inline fun executeLinearHotInstruction(
         store: Store,
         frame: GuestCallFrame,
+        stack: RuntimeValueStack,
+        locals: RuntimeValueStack,
+        localsBase: Int,
+        instance: Instance,
         opcode: Int,
         immediate: Int,
         body: List<Instr>,
         pc: Int,
     ) {
-        val stack = store.valueStack
         when (opcode) {
-            0x20 -> store.localStack.copyTo(
-                frame.localsBase + immediate,
+            0x20 -> locals.copyTo(
+                localsBase + immediate,
                 stack,
             )
             0x21 -> stack.moveLastTo(
-                store.localStack,
-                frame.localsBase + immediate,
+                locals,
+                localsBase + immediate,
             )
             0x22 -> stack.copyTo(
                 stack.lastIndex,
-                store.localStack,
-                frame.localsBase + immediate,
+                locals,
+                localsBase + immediate,
             )
             0x41 -> stack.addLastI32(immediate)
             0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)
@@ -1059,7 +1202,13 @@ public class Interpreter : ResumableMachine {
                 val left = stack.removeLastI32()
                 stack.addLastI32(rotr(left, right))
             }
-            else -> executeNonSuspendingHotInstruction(store, frame, body[pc])
+            else -> executeNonSuspendingHotInstruction(
+                store,
+                frame,
+                body[pc],
+                instance,
+                stack,
+            )
         }
     }
 
@@ -1067,6 +1216,24 @@ public class Interpreter : ResumableMachine {
         is FcIndex -> index
         is I32Const -> value
         else -> 0
+    }
+
+    /**
+     * Returns whether an otherwise linear instruction can produce a guest
+     * trap. The local-PC loop publishes its next PC before these instructions
+     * so trap listeners and synthetic guest stacks observe the same location
+     * as the general interpreter loop.
+     */
+    private fun linearHotInstructionMayTrap(opcode: Int): Boolean = when (opcode) {
+        in 0x1A..0x1C,
+        in 0x20..0x24,
+        in 0x41..0x6C,
+        in 0x71..0x7E,
+        in 0x83..0xA7,
+        in 0xAC..0xAD,
+        in 0xB2..0xC4,
+        -> false
+        else -> true
     }
 
     /**
@@ -1079,9 +1246,9 @@ public class Interpreter : ResumableMachine {
         store: Store,
         frame: GuestCallFrame,
         instruction: Instr,
+        instance: Instance,
+        stack: RuntimeValueStack,
     ): FastInstructionResult {
-        val instance = frame.instance
-        val stack = store.valueStack
         when (instruction.opcode) {
             in 0x45..0xC4 -> {
                 if (instruction !is Simple) return FastInstructionResult.NotHandled
@@ -1958,18 +2125,25 @@ public class Interpreter : ResumableMachine {
     }
 
     private fun canonicalizeTop(store: Store) {
-        if (!store.config.canonicalizeNaNs || store.valueStack.isEmpty()) return
-        val index = store.valueStack.lastIndex
-        store.valueStack[index] = canonicalize(store, store.valueStack[index])
+        if (!store.config.canonicalizeNaNs) return
+        canonicalizeTop(store.valueStack)
+    }
+
+    private fun canonicalizeTop(stack: RuntimeValueStack) {
+        if (stack.isEmpty()) return
+        val index = stack.lastIndex
+        stack[index] = canonicalizeNaN(stack[index])
     }
 
     private fun canonicalize(store: Store, value: Value): Value {
         if (!store.config.canonicalizeNaNs) return value
-        return when (value) {
-            is Value.F32 -> if (value.v.isNaN()) Value.F32(Float.fromBits(0x7FC00000)) else value
-            is Value.F64 -> if (value.v.isNaN()) Value.F64(Double.fromBits(0x7FF8000000000000L)) else value
-            else -> value
-        }
+        return canonicalizeNaN(value)
+    }
+
+    private fun canonicalizeNaN(value: Value): Value = when (value) {
+        is Value.F32 -> if (value.v.isNaN()) Value.F32(Float.fromBits(0x7FC00000)) else value
+        is Value.F64 -> if (value.v.isNaN()) Value.F64(Double.fromBits(0x7FF8000000000000L)) else value
+        else -> value
     }
 
     private fun nullRefFor(heap: HeapType, module: Module): Value.Ref = when (heap) {
