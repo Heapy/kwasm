@@ -1,6 +1,16 @@
 package io.heapy.kwasm
 
 /**
+ * Controls redundant tag assertions in validated interpreter paths.
+ *
+ * JVM-like targets retain the assertions as inexpensive invariant checks.
+ * Kotlin/Native compiles them out after module validation has established the
+ * operand and local types. Tags themselves remain available to generic,
+ * reference, copy, and snapshot boundaries on every platform.
+ */
+internal expect val CHECK_VALIDATED_TYPED_STACK_TAGS: Boolean
+
+/**
  * Interpreter value stack with unboxed numeric slots.
  *
  * Numeric [Value] wrappers remain the public boundary representation, but
@@ -69,28 +79,36 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
 
     fun removeLastI32(): Int {
         val index = checkedLastIndex()
-        check(tags[index] == I32) { "value stack top is not i32" }
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] == I32) { "value stack top is not i32" }
+        }
         size = index
         return bits[index].toInt()
     }
 
     fun removeLastI64(): Long {
         val index = checkedLastIndex()
-        check(tags[index] == I64) { "value stack top is not i64" }
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] == I64) { "value stack top is not i64" }
+        }
         size = index
         return bits[index]
     }
 
     fun removeLastF32(): Float {
         val index = checkedLastIndex()
-        check(tags[index] == F32) { "value stack top is not f32" }
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] == F32) { "value stack top is not f32" }
+        }
         size = index
         return Float.fromBits(bits[index].toInt())
     }
 
     fun removeLastF64(): Double {
         val index = checkedLastIndex()
-        check(tags[index] == F64) { "value stack top is not f64" }
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] == F64) { "value stack top is not f64" }
+        }
         size = index
         return Double.fromBits(bits[index])
     }
@@ -104,7 +122,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
 
     fun getI32(index: Int): Int {
         checkIndex(index)
-        check(tags[index] == I32) { "value stack slot $index is not i32" }
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] == I32) { "value stack slot $index is not i32" }
+        }
         return bits[index].toInt()
     }
 

@@ -21,6 +21,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class InterpreterHotPathInvariantTest {
@@ -488,6 +489,29 @@ class InterpreterHotPathInvariantTest {
 
         assertEquals(listOf(Value.I32(42)), instance.invoke("value"))
         assertEquals(1, calls)
+    }
+
+    @Test
+    fun genericSnapshotAndCopyBoundariesKeepRuntimeTags() {
+        val reference = Value.Ref.Host(Any())
+        val source = RuntimeValueStack(initialCapacity = 0)
+        source.addLastI32(-17)
+        source.addLastI64(Long.MAX_VALUE)
+        source.addLast(reference)
+
+        val snapshotBoundary = source.toList()
+        assertEquals(Value.I32(-17), snapshotBoundary[0])
+        assertEquals(Value.I64(Long.MAX_VALUE), snapshotBoundary[1])
+        assertSame(reference, snapshotBoundary[2])
+
+        val copied = RuntimeValueStack(initialCapacity = 0)
+        source.copyTo(0, copied)
+        source.copyTo(1, copied)
+        source.copyTo(2, copied)
+
+        assertEquals(Value.I32(-17), copied[0])
+        assertEquals(Value.I64(Long.MAX_VALUE), copied[1])
+        assertSame(reference, copied[2])
     }
 
     private fun assertHotCodeIsAligned(body: List<Instr>, hotCode: LinearHotCode) {
