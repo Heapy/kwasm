@@ -2,6 +2,7 @@ package io.heapy.kwasm
 
 import io.heapy.kwasm.Instr.Block
 import io.heapy.kwasm.Instr.BrIf
+import io.heapy.kwasm.Instr.Call
 import io.heapy.kwasm.Instr.FcIndex
 import io.heapy.kwasm.Instr.I32Const
 import io.heapy.kwasm.Instr.Loop
@@ -9,7 +10,9 @@ import io.heapy.kwasm.Instr.Simple
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -220,6 +223,19 @@ class InterpreterHotPathInvariantTest {
         assertEquals(fallback, fused)
         assertEquals(Value.I32(2), fused.result)
         assertEquals(listOf(0 to -1, 0 to -1), fused.checkpoints)
+    }
+
+    @Test
+    fun takenBlockCompareBranchDoesNotObserveAPendingPause(): Unit = runBlocking {
+        val module = importedCompareBranchModule()
+        val fused = invokeImportedCompareBranchWithPendingPause(module, fused = true)
+        val fallback = invokeImportedCompareBranchWithPendingPause(module, fused = false)
+
+        assertEquals(fallback, fused)
+        assertEquals(Value.I32(42), fused.result)
+        assertEquals(listOf(1 to -1, 1 to -1), fused.checkpoints)
+        assertEquals(StoreStatus.Idle, fused.status)
+        assertTrue(fused.pausePending)
     }
 
     @Test
@@ -441,6 +457,62 @@ class InterpreterHotPathInvariantTest {
         CompareBranchTrace(invocation.await(), checkpoints)
     }
 
+    private suspend fun invokeImportedCompareBranchWithPendingPause(
+        module: Module,
+        fused: Boolean,
+    ): PendingPauseCompareBranchTrace = coroutineScope {
+        val gate = CompletableDeferred<Unit>()
+        val checkpoints = mutableListOf<Pair<Int?, Int?>>()
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = Int.MAX_VALUE,
+                checkpointMode = CheckpointMode.Enabled,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        checkpoints += functionIndex to instructionIndex
+                    }
+                },
+            ),
+        )
+        val compareBranchBody = (module.functions.single().body[1] as Block).body
+        val plan = store.linearHotCode(compareBranchBody).plan
+        assertEquals(LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF, plan[1])
+        if (!fused) plan[1] = LINEAR_PLAN_PRODUCERS_BINARY
+        val instance = Instance(
+            store,
+            module,
+            ResolvedImports(
+                functions = listOf(
+                    HostImport(FuncType(emptyList(), emptyList())) {
+                        gate.await()
+                        emptyList()
+                    },
+                ),
+            ),
+        )
+        val invocation = async {
+            instance.invoke("select", listOf(Value.I32(1))).single()
+        }
+        store.status.first { it == StoreStatus.InHostImport }
+        val pause = store.requestPause()
+        gate.complete(Unit)
+        try {
+            val result = withTimeout(5_000) { invocation.await() }
+            PendingPauseCompareBranchTrace(
+                result = result,
+                checkpoints = checkpoints.toList(),
+                status = store.status.value,
+                pausePending = store.controller.hasPauseRequest(),
+            )
+        } finally {
+            pause.resume()
+        }
+    }
+
     private fun selectCompareBranchPlan(
         store: Store,
         module: Module,
@@ -509,6 +581,34 @@ class InterpreterHotPathInvariantTest {
         exports += Export("count", ExportDesc.Function(0))
     }
 
+    private fun importedCompareBranchModule(): Module = validatedModule {
+        types += FuncType(emptyList(), emptyList())
+        types += FuncType(listOf(ValType.I32), listOf(ValType.I32))
+        imports += Import("host", "gate", ImportDesc.Function(0))
+        functions += Function(
+            1,
+            emptyList(),
+            listOf(
+                Call(0),
+                Block(
+                    BlockType.Single(ValType.I32),
+                    listOf(
+                        I32Const(41),
+                        FcIndex(0x20, 0),
+                        I32Const(2),
+                        Simple(0x48),
+                        BrIf(0),
+                        Instr.Drop(),
+                        I32Const(99),
+                    ),
+                ),
+                I32Const(1),
+                Simple(0x6A),
+            ),
+        )
+        exports += Export("select", ExportDesc.Function(1))
+    }
+
     private fun moduleReturning(body: List<Instr>): Module = validatedModule {
         types += FuncType(emptyList(), listOf(ValType.I32))
         functions += Function(0, emptyList(), body)
@@ -526,5 +626,12 @@ class InterpreterHotPathInvariantTest {
     private data class CompareBranchTrace(
         val result: Value,
         val checkpoints: List<Pair<Int?, Int?>>,
+    )
+
+    private data class PendingPauseCompareBranchTrace(
+        val result: Value,
+        val checkpoints: List<Pair<Int?, Int?>>,
+        val status: StoreStatus,
+        val pausePending: Boolean,
     )
 }

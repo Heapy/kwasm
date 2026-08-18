@@ -535,8 +535,10 @@ public class Interpreter : ResumableMachine {
 
     /**
      * Executes the comparison/branch shape used by the fib, SHA, and JSON
-     * fixtures. A taken loop branch stays on the scalar path because loop
-     * back-edges have an additional checkpoint that may suspend.
+     * fixtures. Loop back-edges alone request a post-branch checkpoint, so a
+     * taken loop branch falls back before advancing its PC. Its validated
+     * local/constant i32 comparison is side-effect-free and may be evaluated
+     * a second time by that scalar fallback.
      */
     private fun executePlannedProducersCompareBrIf(
         store: Store,
@@ -569,6 +571,8 @@ public class Interpreter : ResumableMachine {
 
         control.pc = pc + 4
         if (shouldBranch) {
+            // branch() requests a post-branch checkpoint only for Loop targets,
+            // which the planned path rejects before advancing its PC.
             check(!branch(store, frame, branchInstruction.depth)) {
                 "non-loop planned branch unexpectedly requested a checkpoint"
             }
