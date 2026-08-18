@@ -254,6 +254,16 @@ class InterpreterHotPathInvariantTest {
     }
 
     @Test
+    fun fusedFunctionBranchPublishesCountdownBeforeCallFinishedListener(): Unit = runBlocking {
+        assertFusedFunctionBranchListenerState(listenerThrows = false)
+    }
+
+    @Test
+    fun fusedFunctionBranchPublishesCountdownBeforeThrowingListener(): Unit = runBlocking {
+        assertFusedFunctionBranchListenerState(listenerThrows = true)
+    }
+
+    @Test
     fun reusedControlReplacesBodyAndItsHotCode() {
         val firstBody = listOf<Instr>(I32Const(1))
         val secondBody = plannedExpressionBody()
@@ -583,6 +593,46 @@ class InterpreterHotPathInvariantTest {
         }.kind
     }
 
+    private suspend fun assertFusedFunctionBranchListenerState(listenerThrows: Boolean) {
+        val module = fusedFunctionExitModule()
+        val observedCountdowns = mutableListOf<Int>()
+        lateinit var store: Store
+        store = Store(
+            StoreConfig(
+                checkpointInterval = 17,
+                listener = object : ExecutionListener {
+                    override fun onCallFinished(
+                        instance: Instance,
+                        functionIndex: Int,
+                        results: List<Value>,
+                    ) {
+                        observedCountdowns += store.instructionsUntilCheckpoint
+                        if (listenerThrows) throw ListenerFailure()
+                    }
+                },
+            ),
+        )
+        val plan = store.linearHotCode(module.functions.single().body).plan
+        for (pc in listOf(0, 4, 8)) {
+            assertEquals(LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF, plan[pc])
+        }
+        val instance = Instance(store, module, ResolvedImports())
+
+        if (listenerThrows) {
+            assertFailsWith<ListenerFailure> {
+                instance.invoke("exit", listOf(Value.I32(1)))
+            }
+        } else {
+            assertContentEquals(
+                emptyList(),
+                instance.invoke("exit", listOf(Value.I32(1))),
+            )
+        }
+
+        assertEquals(listOf(5), observedCountdowns)
+        assertEquals(5, store.instructionsUntilCheckpoint)
+    }
+
     private suspend fun invokeLoopCompareBranchWithPause(
         module: Module,
         fused: Boolean,
@@ -774,6 +824,29 @@ class InterpreterHotPathInvariantTest {
         exports += Export("select", ExportDesc.Function(1))
     }
 
+    private fun fusedFunctionExitModule(): Module = validatedModule {
+        types += FuncType(listOf(ValType.I32), emptyList())
+        functions += Function(
+            typeIndex = 0,
+            locals = emptyList(),
+            body = listOf(
+                FcIndex(0x20, 0),
+                I32Const(0),
+                Simple(0x48),
+                BrIf(0),
+                FcIndex(0x20, 0),
+                I32Const(1),
+                Simple(0x48),
+                BrIf(0),
+                FcIndex(0x20, 0),
+                I32Const(2),
+                Simple(0x48),
+                BrIf(0),
+            ),
+        )
+        exports += Export("exit", ExportDesc.Function(0))
+    }
+
     private fun moduleReturning(body: List<Instr>): Module = validatedModule {
         types += FuncType(emptyList(), listOf(ValType.I32))
         functions += Function(0, emptyList(), body)
@@ -799,4 +872,6 @@ class InterpreterHotPathInvariantTest {
         val status: StoreStatus,
         val pausePending: Boolean,
     )
+
+    private class ListenerFailure : RuntimeException()
 }

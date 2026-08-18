@@ -25,6 +25,14 @@ public class Interpreter : ResumableMachine {
         RequiresSlowCheckpointAfterInstruction,
     }
 
+    private sealed interface PlannedCompareBranchOutcome {
+        data object NotFused : PlannedCompareBranchOutcome
+
+        data object Fallthrough : PlannedCompareBranchOutcome
+
+        data class Taken(val depth: Int) : PlannedCompareBranchOutcome
+    }
+
     override suspend fun invoke(
         instance: Instance,
         functionIndex: Int,
@@ -403,25 +411,27 @@ public class Interpreter : ResumableMachine {
                 stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             ) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                    if (
-                        executePlannedProducersCompareBrIfHoisted(
-                            store,
+                    when (
+                        val outcome = evaluatePlannedProducersCompareBrIf(
                             frame,
-                            control,
                             locals,
                             localsBase,
                             body,
                             pc,
                         )
                     ) {
-                        if (
-                            store.frames.lastOrNull() !== frame ||
-                            frame.controls.lastOrNull() !== control
-                        ) {
+                        PlannedCompareBranchOutcome.NotFused -> Unit
+                        PlannedCompareBranchOutcome.Fallthrough -> {
+                            pc += plannedInstructionCount
+                            continue
+                        }
+                        is PlannedCompareBranchOutcome.Taken -> {
+                            control.pc = pc + plannedInstructionCount
+                            check(!branch(store, frame, outcome.depth)) {
+                                "non-loop planned branch unexpectedly requested a checkpoint"
+                            }
                             return
                         }
-                        pc += plannedInstructionCount
-                        continue
                     }
                 } else {
                     // Preserve the pre-existing trap location for a planned
@@ -560,27 +570,30 @@ public class Interpreter : ResumableMachine {
                 stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             if (canExecutePlannedInstruction) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                    if (
-                        executePlannedProducersCompareBrIfHoisted(
-                            store,
+                    when (
+                        val outcome = evaluatePlannedProducersCompareBrIf(
                             frame,
-                            control,
                             locals,
                             localsBase,
                             body,
                             pc,
                         )
                     ) {
-                        instructionsUntilCheckpoint -= plannedInstructionCount
-                        if (
-                            store.frames.lastOrNull() !== frame ||
-                            frame.controls.lastOrNull() !== control
-                        ) {
+                        PlannedCompareBranchOutcome.NotFused -> Unit
+                        PlannedCompareBranchOutcome.Fallthrough -> {
+                            instructionsUntilCheckpoint -= plannedInstructionCount
+                            pc += plannedInstructionCount
+                            continue
+                        }
+                        is PlannedCompareBranchOutcome.Taken -> {
+                            instructionsUntilCheckpoint -= plannedInstructionCount
+                            control.pc = pc + plannedInstructionCount
                             store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                            check(!branch(store, frame, outcome.depth)) {
+                                "non-loop planned branch unexpectedly requested a checkpoint"
+                            }
                             return LinearHotLoopResult.Complete
                         }
-                        pc += plannedInstructionCount
-                        continue
                     }
                 } else {
                     // Preserve the pre-existing trap location and countdown
@@ -684,21 +697,20 @@ public class Interpreter : ResumableMachine {
     }
 
     /**
-     * Executes the comparison/branch shape used by the fib, SHA, and JSON
-     * fixtures. Loop back-edges alone request a post-branch checkpoint, so a
-     * taken loop branch falls back before advancing its PC. Its validated
-     * local/constant i32 comparison is side-effect-free and may be evaluated
-     * a second time by that scalar fallback.
+     * Evaluates the comparison/branch shape used by the fib, SHA, and JSON
+     * fixtures without performing its control transfer. Callers can therefore
+     * publish observable PC and checkpoint state before a taken branch invokes
+     * an embedder listener. Loop back-edges alone request a post-branch
+     * checkpoint, so they fall back before advancing the PC; their validated
+     * comparison is side-effect-free and may be evaluated again there.
      */
-    private fun executePlannedProducersCompareBrIfHoisted(
-        store: Store,
+    private fun evaluatePlannedProducersCompareBrIf(
         frame: GuestCallFrame,
-        control: GuestControlFrame,
         locals: RuntimeValueStack,
         localsBase: Int,
         body: List<Instr>,
         pc: Int,
-    ): Boolean {
+    ): PlannedCompareBranchOutcome {
         val first = body[pc] as FcIndex
         val second = body[pc + 1]
         val operation = body[pc + 2] as Simple
@@ -716,19 +728,14 @@ public class Interpreter : ResumableMachine {
                 targetIndex in frame.controls.indices &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
-                return false
+                return PlannedCompareBranchOutcome.NotFused
             }
         }
-
-        if (shouldBranch) {
-            control.pc = pc + 4
-            // branch() requests a post-branch checkpoint only for Loop targets,
-            // which the planned path rejects before advancing its PC.
-            check(!branch(store, frame, branchInstruction.depth)) {
-                "non-loop planned branch unexpectedly requested a checkpoint"
-            }
+        return if (shouldBranch) {
+            PlannedCompareBranchOutcome.Taken(branchInstruction.depth)
+        } else {
+            PlannedCompareBranchOutcome.Fallthrough
         }
-        return true
     }
 
     /**
@@ -778,26 +785,32 @@ public class Interpreter : ResumableMachine {
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
                     store.config.limits.maxValueStackSlots
             ) {
-                if (
-                    superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
-                    executePlannedProducersCompareBrIfOriginal(
-                        store,
-                        frame,
-                        control,
-                        body,
-                        pc,
-                    )
-                ) {
-                    store.ensureValueStackLimit()
-                    if (
-                        store.frames.lastOrNull() !== frame ||
-                        frame.controls.lastOrNull() !== control
+                if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
+                    when (
+                        val outcome = evaluatePlannedProducersCompareBrIf(
+                            frame,
+                            store.localStack,
+                            frame.localsBase,
+                            body,
+                            pc,
+                        )
                     ) {
-                        return
+                        PlannedCompareBranchOutcome.NotFused -> Unit
+                        PlannedCompareBranchOutcome.Fallthrough -> {
+                            control.pc = pc + plannedInstructionCount(superInstruction)
+                            store.ensureValueStackLimit()
+                            continue
+                        }
+                        is PlannedCompareBranchOutcome.Taken -> {
+                            control.pc = pc + plannedInstructionCount(superInstruction)
+                            check(!branch(store, frame, outcome.depth)) {
+                                "non-loop planned branch unexpectedly requested a checkpoint"
+                            }
+                            store.ensureValueStackLimit()
+                            return
+                        }
                     }
-                    continue
                 } else if (
-                    superInstruction != LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
                     executePlannedSuperInstructionOriginal(
                         store,
                         frame,
@@ -894,25 +907,33 @@ public class Interpreter : ResumableMachine {
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
                     store.config.limits.maxValueStackSlots
             if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
-                if (
-                    canExecutePlannedInstruction &&
-                    executePlannedProducersCompareBrIfOriginal(
-                        store,
-                        frame,
-                        control,
-                        body,
-                        pc,
-                    )
-                ) {
-                    store.instructionsUntilCheckpoint -= plannedInstructionCount
-                    store.ensureValueStackLimit()
-                    if (
-                        store.frames.lastOrNull() !== frame ||
-                        frame.controls.lastOrNull() !== control
+                if (canExecutePlannedInstruction) {
+                    when (
+                        val outcome = evaluatePlannedProducersCompareBrIf(
+                            frame,
+                            store.localStack,
+                            frame.localsBase,
+                            body,
+                            pc,
+                        )
                     ) {
-                        return LinearHotLoopResult.Complete
+                        PlannedCompareBranchOutcome.NotFused -> Unit
+                        PlannedCompareBranchOutcome.Fallthrough -> {
+                            store.instructionsUntilCheckpoint -= plannedInstructionCount
+                            control.pc = pc + plannedInstructionCount
+                            store.ensureValueStackLimit()
+                            continue
+                        }
+                        is PlannedCompareBranchOutcome.Taken -> {
+                            store.instructionsUntilCheckpoint -= plannedInstructionCount
+                            control.pc = pc + plannedInstructionCount
+                            check(!branch(store, frame, outcome.depth)) {
+                                "non-loop planned branch unexpectedly requested a checkpoint"
+                            }
+                            store.ensureValueStackLimit()
+                            return LinearHotLoopResult.Complete
+                        }
                     }
-                    continue
                 }
             } else if (
                 canExecutePlannedInstruction &&
@@ -975,44 +996,6 @@ public class Interpreter : ResumableMachine {
             store.ensureValueStackLimit()
         }
         return LinearHotLoopResult.Complete
-    }
-
-    private fun executePlannedProducersCompareBrIfOriginal(
-        store: Store,
-        frame: GuestCallFrame,
-        control: GuestControlFrame,
-        body: List<Instr>,
-        pc: Int,
-    ): Boolean {
-        val first = body[pc] as FcIndex
-        val second = body[pc + 1]
-        val operation = body[pc + 2] as Simple
-        val branchInstruction = body[pc + 3] as BrIf
-        val locals = store.localStack
-        val left = locals.getI32(frame.localsBase + first.index)
-        val right = if (second is I32Const) {
-            second.value
-        } else {
-            locals.getI32(frame.localsBase + (second as FcIndex).index)
-        }
-        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
-        if (shouldBranch) {
-            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
-            if (
-                targetIndex in frame.controls.indices &&
-                frame.controls[targetIndex].kind == ControlKind.Loop
-            ) {
-                return false
-            }
-        }
-
-        control.pc = pc + 4
-        if (shouldBranch) {
-            check(!branch(store, frame, branchInstruction.depth)) {
-                "non-loop planned branch unexpectedly requested a checkpoint"
-            }
-        }
-        return true
     }
 
     /**
