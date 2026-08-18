@@ -87,6 +87,21 @@ benchmark {
             include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
             advanced("jvmForks", 0)
         }
+        register("optimizationStudy") {
+            warmups = 3
+            iterations = 5
+            iterationTime = 1
+            iterationTimeUnit = "s"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
+            include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
+            include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
+            advanced("jvmForks", 1)
+            advanced("nativeFork", "perBenchmark")
+            advanced("nativeGCAfterIteration", true)
+        }
         register("checkpointSmoke") {
             warmups = 1
             iterations = 1
