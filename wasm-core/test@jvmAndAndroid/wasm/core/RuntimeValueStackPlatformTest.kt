@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class RuntimeValueStackPlatformTest {
     @Test
-    fun jvmKeepsValidatedTypedTagAssertions() {
+    fun jvmAndAndroidKeepValidatedTypedTagAssertions() {
         assertTrue(CHECK_VALIDATED_TYPED_STACK_TAGS)
 
         assertCheckedMismatch(Value.I64(1)) { it.getI32(0) }

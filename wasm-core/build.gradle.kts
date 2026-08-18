@@ -20,6 +20,7 @@ kotlin {
         compileSdk = 36
         minSdk = 26
         compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
+        withHostTest {}
     }
     jvm {
         compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
@@ -72,6 +73,10 @@ kotlin {
         jvmTest {
             kotlin.srcDir("jvmTest")
             kotlin.srcDir("test@jvm")
+            kotlin.srcDir("test@jvmAndAndroid")
+        }
+        named("androidHostTest") {
+            kotlin.srcDir("test@jvmAndAndroid")
         }
     }
 }
