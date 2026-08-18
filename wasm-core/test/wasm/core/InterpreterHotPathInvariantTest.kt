@@ -1,13 +1,20 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.Instr.Block
+import io.heapy.kwasm.Instr.BrIf
 import io.heapy.kwasm.Instr.FcIndex
 import io.heapy.kwasm.Instr.I32Const
+import io.heapy.kwasm.Instr.Loop
 import io.heapy.kwasm.Instr.Simple
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -135,6 +142,100 @@ class InterpreterHotPathInvariantTest {
     }
 
     @Test
+    fun plannerFusesTheFixtureComparisonBranchShapesOnly() {
+        val fibShape = listOf<Instr>(
+            FcIndex(0x20, 0),
+            I32Const(2),
+            Simple(0x48),
+            BrIf(0),
+        )
+        val loopLimitShape = listOf<Instr>(
+            FcIndex(0x20, 0),
+            FcIndex(0x20, 1),
+            Simple(0x4F),
+            BrIf(1),
+        )
+        val arithmeticShape = listOf<Instr>(
+            FcIndex(0x20, 0),
+            I32Const(2),
+            Simple(0x6A),
+            BrIf(0),
+        )
+
+        assertEquals(
+            LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF,
+            Store().linearHotCode(fibShape).plan.first(),
+        )
+        assertEquals(
+            LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF,
+            Store().linearHotCode(loopLimitShape).plan.first(),
+        )
+        assertEquals(
+            LINEAR_PLAN_PRODUCERS_BINARY,
+            Store().linearHotCode(arithmeticShape).plan.first(),
+        )
+    }
+
+    @Test
+    fun fusedCompareBranchMatchesFallbackResultsAndCheckpointLocations(): Unit = runBlocking {
+        for (localLimit in listOf(false, true)) {
+            val module = compareBranchModule(localLimit)
+            for (mode in CheckpointMode.entries) {
+                for (argument in listOf(1, 2)) {
+                    val arguments = buildList {
+                        add(Value.I32(argument))
+                        if (localLimit) add(Value.I32(2))
+                    }
+                    val fused = invokeCompareBranch(module, mode, arguments, fused = true)
+                    val fallback = invokeCompareBranch(module, mode, arguments, fused = false)
+
+                    assertEquals(
+                        fallback,
+                        fused,
+                        "$mode localLimit=$localLimit argument=$argument",
+                    )
+                    assertEquals(
+                        if (argument < 2) Value.I32(42) else Value.I32(100),
+                        fused.result,
+                    )
+                    assertEquals(
+                        if (mode == CheckpointMode.Enabled) {
+                            listOf(0 to -1, 0 to if (argument < 2) 0 else 4)
+                        } else {
+                            emptyList()
+                        },
+                        fused.checkpoints,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun takenLoopCompareBranchFallsBackAndPreservesPauseResume(): Unit = runBlocking {
+        val module = loopCompareBranchModule()
+        val fused = invokeLoopCompareBranchWithPause(module, fused = true)
+        val fallback = invokeLoopCompareBranchWithPause(module, fused = false)
+
+        assertEquals(fallback, fused)
+        assertEquals(Value.I32(2), fused.result)
+        assertEquals(listOf(0 to -1, 0 to -1), fused.checkpoints)
+    }
+
+    @Test
+    fun fusedCompareBranchPreservesTheFallbackPeakStackTrap(): Unit = runBlocking {
+        val module = compareBranchModule()
+
+        for (mode in CheckpointMode.entries) {
+            val fused = compareBranchTrap(module, mode, fused = true)
+            val fallback = compareBranchTrap(module, mode, fused = false)
+
+            assertEquals(TrapKind.STACK_EXHAUSTED, fused)
+            assertEquals(fallback, fused, mode.toString())
+        }
+    }
+
+    @Test
     fun reusedControlReplacesBodyAndItsHotCode() {
         val firstBody = listOf<Instr>(I32Const(1))
         val secondBody = plannedExpressionBody()
@@ -254,6 +355,160 @@ class InterpreterHotPathInvariantTest {
         FcIndex(0x21, 0),
     )
 
+    private suspend fun invokeCompareBranch(
+        module: Module,
+        mode: CheckpointMode,
+        arguments: List<Value>,
+        fused: Boolean,
+    ): CompareBranchTrace {
+        val checkpoints = mutableListOf<Pair<Int?, Int?>>()
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = 7,
+                checkpointMode = mode,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        checkpoints += functionIndex to instructionIndex
+                    }
+                },
+            ),
+        )
+        selectCompareBranchPlan(store, module, fused)
+        val result = Instance(store, module, ResolvedImports())
+            .invoke("select", arguments)
+            .single()
+        return CompareBranchTrace(result, checkpoints)
+    }
+
+    private suspend fun compareBranchTrap(
+        module: Module,
+        mode: CheckpointMode,
+        fused: Boolean,
+    ): TrapKind {
+        val store = Store(
+            StoreConfig(
+                limits = ExecutionLimits(maxValueStackSlots = 2),
+                checkpointMode = mode,
+            ),
+        )
+        selectCompareBranchPlan(store, module, fused)
+        return assertFailsWith<ExecutionTrap> {
+            Instance(store, module, ResolvedImports())
+                .invoke("select", listOf(Value.I32(1)))
+        }.kind
+    }
+
+    private suspend fun invokeLoopCompareBranchWithPause(
+        module: Module,
+        fused: Boolean,
+    ): CompareBranchTrace = coroutineScope {
+        val checkpoints = mutableListOf<Pair<Int?, Int?>>()
+        val pauseRequested = CompletableDeferred<PauseHandle>()
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = Int.MAX_VALUE,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        checkpoints += functionIndex to instructionIndex
+                        if (checkpoints.size == 2) {
+                            pauseRequested.complete(store.requestPause())
+                        }
+                    }
+                },
+            ),
+        )
+        val functionBody = module.functions.single().body
+        val loopBody = (functionBody[2] as Loop).body
+        val plan = store.linearHotCode(loopBody).plan
+        assertEquals(LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF, plan[4])
+        if (!fused) plan[4] = LINEAR_PLAN_PRODUCERS_BINARY
+
+        val invocation = async {
+            Instance(store, module, ResolvedImports()).invoke("count").single()
+        }
+        val pause = pauseRequested.await()
+        pause.awaitPaused()
+        assertEquals(StoreStatus.Paused, store.status.value)
+        pause.resume()
+        CompareBranchTrace(invocation.await(), checkpoints)
+    }
+
+    private fun selectCompareBranchPlan(
+        store: Store,
+        module: Module,
+        fused: Boolean,
+    ) {
+        val functionBody = module.functions.single().body
+        val compareBranchBody = (functionBody.first() as Block).body
+        val plan = store.linearHotCode(compareBranchBody).plan
+        assertEquals(LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF, plan[1])
+        if (!fused) plan[1] = LINEAR_PLAN_PRODUCERS_BINARY
+    }
+
+    private fun compareBranchModule(localLimit: Boolean = false): Module = validatedModule {
+        val parameters =
+            if (localLimit) listOf(ValType.I32, ValType.I32) else listOf(ValType.I32)
+        val comparisonRight: Instr =
+            if (localLimit) FcIndex(0x20, 1) else I32Const(2)
+        types += FuncType(parameters, listOf(ValType.I32))
+        functions += Function(
+            0,
+            emptyList(),
+            listOf(
+                Block(
+                    BlockType.Single(ValType.I32),
+                    listOf(
+                        I32Const(41),
+                        FcIndex(0x20, 0),
+                        comparisonRight,
+                        Simple(0x48),
+                        BrIf(0),
+                        Instr.Drop(),
+                        I32Const(99),
+                    ),
+                ),
+                I32Const(1),
+                Simple(0x6A),
+            ),
+        )
+        exports += Export("select", ExportDesc.Function(0))
+    }
+
+    private fun loopCompareBranchModule(): Module = validatedModule {
+        types += FuncType(emptyList(), listOf(ValType.I32))
+        functions += Function(
+            0,
+            listOf(ValType.I32),
+            listOf(
+                I32Const(0),
+                FcIndex(0x21, 0),
+                Loop(
+                    BlockType.Empty,
+                    listOf(
+                        FcIndex(0x20, 0),
+                        I32Const(1),
+                        Simple(0x6A),
+                        FcIndex(0x21, 0),
+                        FcIndex(0x20, 0),
+                        I32Const(2),
+                        Simple(0x48),
+                        BrIf(0),
+                    ),
+                ),
+                FcIndex(0x20, 0),
+            ),
+        )
+        exports += Export("count", ExportDesc.Function(0))
+    }
+
     private fun moduleReturning(body: List<Instr>): Module = validatedModule {
         types += FuncType(emptyList(), listOf(ValType.I32))
         functions += Function(0, emptyList(), body)
@@ -267,4 +522,9 @@ class InterpreterHotPathInvariantTest {
         val WASM_HEADER: ByteArray =
             byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
     }
+
+    private data class CompareBranchTrace(
+        val result: Value,
+        val checkpoints: List<Pair<Int?, Int?>>,
+    )
 }

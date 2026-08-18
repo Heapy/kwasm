@@ -884,6 +884,8 @@ public class Store(
             if (operation.opcode.isPlannedI32Binary()) {
                 val fourth = body.getOrNull(index + 3)
                 plan[index] = when {
+                    operation.opcode.isPlannedI32Comparison() && fourth is Instr.BrIf ->
+                        LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF
                     fourth is Instr.FcIndex && fourth.opcode == 0x21 ->
                         LINEAR_PLAN_PRODUCERS_BINARY_SET
                     fourth is Instr.Simple && fourth.opcode.isPlannedI32Binary() -> {
@@ -1639,6 +1641,7 @@ internal const val LINEAR_PLAN_LOCAL_I32_LOAD_SET: Byte = -9
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_TEE: Byte = -10
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET: Byte = -11
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE: Byte = -12
+internal const val LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF: Byte = -13
 internal const val LINEAR_PLAN_CONST_BINARY: Byte = 2
 internal const val LINEAR_PLAN_PRODUCERS_BINARY: Byte = 3
 internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY: Byte = 4
@@ -1673,6 +1676,8 @@ private fun List<Instr>.shouldPackLinearHotInstructions(hotInstructionCount: Int
 
 private fun Int.isPlannedI32Binary(): Boolean =
     this in 0x46..0x4F || this in 0x6A..0x78
+
+private fun Int.isPlannedI32Comparison(): Boolean = this in 0x46..0x4F
 
 private fun Int.isPlannedI32Load(): Boolean =
     this == 0x28 || this in 0x2C..0x2F

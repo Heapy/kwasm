@@ -351,18 +351,34 @@ public class Interpreter : ResumableMachine {
             if (
                 superInstruction != 0 &&
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots &&
-                executePlannedSuperInstruction(
-                    store,
-                    frame,
-                    body,
-                    pc,
-                    superInstruction,
-                )
+                    store.config.limits.maxValueStackSlots
             ) {
-                control.pc += plannedInstructionCount(superInstruction)
-                store.ensureValueStackLimit()
-                continue
+                if (
+                    superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
+                    executePlannedProducersCompareBrIf(store, frame, control, body, pc)
+                ) {
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
+                    ) {
+                        return
+                    }
+                    continue
+                } else if (
+                    superInstruction != LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
+                    executePlannedSuperInstruction(
+                        store,
+                        frame,
+                        body,
+                        pc,
+                        superInstruction,
+                    )
+                ) {
+                    control.pc += plannedInstructionCount(superInstruction)
+                    store.ensureValueStackLimit()
+                    continue
+                }
             }
             control.pc++
             if (
@@ -437,12 +453,29 @@ public class Interpreter : ResumableMachine {
             }
             val superInstruction = linearHotCode.plan[pc].toInt()
             val plannedInstructionCount = plannedInstructionCount(superInstruction)
-            if (
+            val canExecutePlannedInstruction =
                 !checkpointCompleted &&
                 superInstruction != 0 &&
                 store.instructionsUntilCheckpoint > plannedInstructionCount &&
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots &&
+                    store.config.limits.maxValueStackSlots
+            if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
+                if (
+                    canExecutePlannedInstruction &&
+                    executePlannedProducersCompareBrIf(store, frame, control, body, pc)
+                ) {
+                    store.instructionsUntilCheckpoint -= plannedInstructionCount
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
+                    ) {
+                        return LinearHotLoopResult.Complete
+                    }
+                    continue
+                }
+            } else if (
+                canExecutePlannedInstruction &&
                 executePlannedSuperInstruction(
                     store,
                     frame,
@@ -498,6 +531,49 @@ public class Interpreter : ResumableMachine {
             store.ensureValueStackLimit()
         }
         return LinearHotLoopResult.Complete
+    }
+
+    /**
+     * Executes the comparison/branch shape used by the fib, SHA, and JSON
+     * fixtures. A taken loop branch stays on the scalar path because loop
+     * back-edges have an additional checkpoint that may suspend.
+     */
+    private fun executePlannedProducersCompareBrIf(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        body: List<Instr>,
+        pc: Int,
+    ): Boolean {
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        val operation = body[pc + 2] as Simple
+        val branchInstruction = body[pc + 3] as BrIf
+        val locals = store.localStack
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
+        if (shouldBranch) {
+            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
+            if (
+                targetIndex in frame.controls.indices &&
+                frame.controls[targetIndex].kind == ControlKind.Loop
+            ) {
+                return false
+            }
+        }
+
+        control.pc = pc + 4
+        if (shouldBranch) {
+            check(!branch(store, frame, branchInstruction.depth)) {
+                "non-loop planned branch unexpectedly requested a checkpoint"
+            }
+        }
+        return true
     }
 
     /**
@@ -711,6 +787,7 @@ public class Interpreter : ResumableMachine {
         -> 3
         LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt(),
         LINEAR_PLAN_PRODUCERS_BINARY_BINARY.toInt(),
+        LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt(),
         LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET.toInt(),
         LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE.toInt(),
         -> 4
