@@ -163,7 +163,11 @@ public class Interpreter : ResumableMachine {
                 continue
             }
 
-            runLinearHotSequenceWithoutCheckpoints(store, frame, control)
+            if (USE_HOISTED_LINEAR_HOT_LOOP) {
+                runLinearHotSequenceWithoutCheckpointsHoisted(store, frame, control)
+            } else {
+                runLinearHotSequenceWithoutCheckpointsOriginal(store, frame, control)
+            }
             if (
                 store.frames.lastOrNull() !== frame ||
                 frame.controls.lastOrNull() !== control
@@ -219,12 +223,22 @@ public class Interpreter : ResumableMachine {
 
             var checkpointCompletedForFirstInstruction = false
             while (true) {
-                val result = runLinearHotSequenceUnmetered(
-                    store,
-                    frame,
-                    control,
-                    checkpointCompletedForFirstInstruction,
-                )
+                val result =
+                    if (USE_HOISTED_LINEAR_HOT_LOOP) {
+                        runLinearHotSequenceUnmeteredHoisted(
+                            store,
+                            frame,
+                            control,
+                            checkpointCompletedForFirstInstruction,
+                        )
+                    } else {
+                        runLinearHotSequenceUnmeteredOriginal(
+                            store,
+                            frame,
+                            control,
+                            checkpointCompletedForFirstInstruction,
+                        )
+                    }
                 if (result == LinearHotLoopResult.Complete) break
                 store.checkpoint(
                     handleFuel = false,
@@ -335,7 +349,7 @@ public class Interpreter : ResumableMachine {
      * Runs straight-line numeric/variable/memory instructions without
      * repeatedly resolving the unchanged call and control frames.
      */
-    private fun runLinearHotSequenceWithoutCheckpoints(
+    private fun runLinearHotSequenceWithoutCheckpointsHoisted(
         store: Store,
         frame: GuestCallFrame,
         control: GuestControlFrame,
@@ -394,7 +408,7 @@ public class Interpreter : ResumableMachine {
                 control.pc = pc
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
-                        executePlannedProducersCompareBrIf(
+                        executePlannedProducersCompareBrIfHoisted(
                             store,
                             frame,
                             control,
@@ -487,7 +501,7 @@ public class Interpreter : ResumableMachine {
      * machine. A true result asks the outer suspend loop to service the rare
      * pause checkpoint before this method resumes at the same instruction.
      */
-    private fun runLinearHotSequenceUnmetered(
+    private fun runLinearHotSequenceUnmeteredHoisted(
         store: Store,
         frame: GuestCallFrame,
         control: GuestControlFrame,
@@ -553,7 +567,7 @@ public class Interpreter : ResumableMachine {
                 store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
-                        executePlannedProducersCompareBrIf(
+                        executePlannedProducersCompareBrIfHoisted(
                             store,
                             frame,
                             control,
@@ -679,7 +693,7 @@ public class Interpreter : ResumableMachine {
      * local/constant i32 comparison is side-effect-free and may be evaluated
      * a second time by that scalar fallback.
      */
-    private fun executePlannedProducersCompareBrIf(
+    private fun executePlannedProducersCompareBrIfHoisted(
         store: Store,
         frame: GuestCallFrame,
         control: GuestControlFrame,
@@ -721,10 +735,311 @@ public class Interpreter : ResumableMachine {
     }
 
     /**
+     * JVM/Android variant retained from the pre-hoist interpreter. Publishing
+     * the PC directly on every instruction preserves the managed-runtime code
+     * shape; the Native-specific state hoist is selected separately.
+     */
+    private fun runLinearHotSequenceWithoutCheckpointsOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+    ) {
+        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        val body = control.body
+        val linearHotCode = control.linearHotCode
+        val packedInstructions = linearHotCode.packedInstructions
+        while (control.pc < body.size) {
+            val pc = control.pc
+            val instruction = if (packedInstructions == null) body[pc] else null
+            val packedInstruction =
+                if (packedInstructions == null) 0L else packedInstructions[pc]
+            val opcode = instruction?.opcode ?: packedInstruction.toInt()
+            if (
+                opcode !in 0x20..0x26 &&
+                opcode !in 0x28..0xC4 &&
+                opcode !in 0x02..0x04 &&
+                opcode != 0x0E &&
+                opcode != 0x0F &&
+                opcode != 0x10 &&
+                opcode != 0x0C &&
+                opcode != 0x0D &&
+                opcode != 0x1A &&
+                opcode != 0x1B &&
+                opcode != 0x1C
+            ) {
+                return
+            }
+            if (
+                opcode == 0x10 &&
+                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
+            ) {
+                return
+            }
+            val superInstruction = linearHotCode.plan[pc].toInt()
+            if (
+                superInstruction != 0 &&
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    store.config.limits.maxValueStackSlots
+            ) {
+                if (
+                    superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
+                    executePlannedProducersCompareBrIfOriginal(
+                        store,
+                        frame,
+                        control,
+                        body,
+                        pc,
+                    )
+                ) {
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
+                    ) {
+                        return
+                    }
+                    continue
+                } else if (
+                    superInstruction != LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
+                    executePlannedSuperInstructionOriginal(
+                        store,
+                        frame,
+                        body,
+                        pc,
+                        superInstruction,
+                    )
+                ) {
+                    control.pc += plannedInstructionCount(superInstruction)
+                    store.ensureValueStackLimit()
+                    continue
+                }
+            }
+            control.pc++
+            if (
+                opcode in 0x02..0x04 ||
+                opcode in 0x0C..0x10
+            ) {
+                executeNonSuspendingHotInstructionOriginal(
+                    store,
+                    frame,
+                    instruction ?: body[pc],
+                )
+                if (
+                    store.frames.lastOrNull() !== frame ||
+                    frame.controls.lastOrNull() !== control
+                ) {
+                    return
+                }
+            } else {
+                executeLinearHotInstructionOriginal(
+                    store,
+                    frame,
+                    opcode,
+                    instruction?.linearHotImmediate()
+                        ?: (packedInstruction shr 32).toInt(),
+                    body,
+                    pc,
+                )
+            }
+            if (canonicalizeNaNs) canonicalizeTop(store)
+            store.ensureValueStackLimit()
+        }
+    }
+
+    /**
+     * Checkpoint-enabled counterpart of
+     * [runLinearHotSequenceWithoutCheckpointsOriginal].
+     */
+    private fun runLinearHotSequenceUnmeteredOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        checkpointCompletedForFirstInstruction: Boolean,
+    ): LinearHotLoopResult {
+        val canonicalizeNaNs = store.config.canonicalizeNaNs
+        val body = control.body
+        val linearHotCode = control.linearHotCode
+        val packedInstructions = linearHotCode.packedInstructions
+        var checkpointCompleted = checkpointCompletedForFirstInstruction
+        while (control.pc < body.size) {
+            val pc = control.pc
+            val instruction = if (packedInstructions == null) body[pc] else null
+            val packedInstruction =
+                if (packedInstructions == null) 0L else packedInstructions[pc]
+            val opcode = instruction?.opcode ?: packedInstruction.toInt()
+            if (
+                opcode !in 0x20..0x26 &&
+                opcode !in 0x28..0xC4 &&
+                opcode !in 0x02..0x04 &&
+                opcode != 0x0E &&
+                opcode != 0x0F &&
+                opcode != 0x10 &&
+                opcode != 0x0C &&
+                opcode != 0x0D &&
+                opcode != 0x1A &&
+                opcode != 0x1B &&
+                opcode != 0x1C
+            ) {
+                return LinearHotLoopResult.Complete
+            }
+            if (
+                opcode == 0x10 &&
+                frame.instance.isImportedFunction((body[pc] as Call).funcIndex)
+            ) {
+                return LinearHotLoopResult.Complete
+            }
+            val superInstruction = linearHotCode.plan[pc].toInt()
+            val plannedInstructionCount = plannedInstructionCount(superInstruction)
+            val canExecutePlannedInstruction =
+                !checkpointCompleted &&
+                superInstruction != 0 &&
+                store.instructionsUntilCheckpoint > plannedInstructionCount &&
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    store.config.limits.maxValueStackSlots
+            if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
+                if (
+                    canExecutePlannedInstruction &&
+                    executePlannedProducersCompareBrIfOriginal(
+                        store,
+                        frame,
+                        control,
+                        body,
+                        pc,
+                    )
+                ) {
+                    store.instructionsUntilCheckpoint -= plannedInstructionCount
+                    store.ensureValueStackLimit()
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
+                    ) {
+                        return LinearHotLoopResult.Complete
+                    }
+                    continue
+                }
+            } else if (
+                canExecutePlannedInstruction &&
+                executePlannedSuperInstructionOriginal(
+                    store,
+                    frame,
+                    body,
+                    pc,
+                    superInstruction,
+                )
+            ) {
+                store.instructionsUntilCheckpoint -= plannedInstructionCount
+                control.pc += plannedInstructionCount
+                store.ensureValueStackLimit()
+                continue
+            }
+            if (checkpointCompleted) {
+                checkpointCompleted = false
+            } else {
+                store.instructionsUntilCheckpoint--
+                if (
+                    (opcode == 0x10 || store.instructionsUntilCheckpoint <= 0) &&
+                    checkpointRequiresSlowCheckpoint(store)
+                ) {
+                    return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+                }
+            }
+            control.pc++
+            if (
+                opcode in 0x02..0x04 ||
+                opcode in 0x0C..0x10
+            ) {
+                val result =
+                    executeNonSuspendingHotInstructionOriginal(
+                        store,
+                        frame,
+                        instruction ?: body[pc],
+                    )
+                if (result == FastInstructionResult.RequiresSlowCheckpoint) {
+                    return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
+                }
+                if (
+                    store.frames.lastOrNull() !== frame ||
+                    frame.controls.lastOrNull() !== control
+                ) {
+                    return LinearHotLoopResult.Complete
+                }
+            } else {
+                executeLinearHotInstructionOriginal(
+                    store,
+                    frame,
+                    opcode,
+                    instruction?.linearHotImmediate()
+                        ?: (packedInstruction shr 32).toInt(),
+                    body,
+                    pc,
+                )
+            }
+            if (canonicalizeNaNs) canonicalizeTop(store)
+            store.ensureValueStackLimit()
+        }
+        return LinearHotLoopResult.Complete
+    }
+
+    private fun executePlannedProducersCompareBrIfOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        body: List<Instr>,
+        pc: Int,
+    ): Boolean {
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        val operation = body[pc + 2] as Simple
+        val branchInstruction = body[pc + 3] as BrIf
+        val locals = store.localStack
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
+        if (shouldBranch) {
+            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
+            if (
+                targetIndex in frame.controls.indices &&
+                frame.controls[targetIndex].kind == ControlKind.Loop
+            ) {
+                return false
+            }
+        }
+
+        control.pc = pc + 4
+        if (shouldBranch) {
+            check(!branch(store, frame, branchInstruction.depth)) {
+                "non-loop planned branch unexpectedly requested a checkpoint"
+            }
+        }
+        return true
+    }
+
+    /**
      * Executes the most common validated i32 producer/producer/operator
      * sequence as one dispatch. Callers guarantee that no checkpoint boundary
      * can fall inside these three logical instructions.
      */
+    private fun executePlannedSuperInstructionOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        body: List<Instr>,
+        pc: Int,
+        plan: Int,
+    ): Boolean = executePlannedSuperInstruction(
+        frame.instance,
+        store.valueStack,
+        store.localStack,
+        frame.localsBase,
+        store.i32ExpressionScratch,
+        body,
+        pc,
+        plan,
+    )
+
     private fun executePlannedSuperInstruction(
         instance: Instance,
         stack: RuntimeValueStack,
@@ -1046,6 +1361,164 @@ public class Interpreter : ResumableMachine {
      * loop instead of crossing the large general-dispatch method twice.
      */
     @Suppress("NOTHING_TO_INLINE")
+    private inline fun executeLinearHotInstructionOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        opcode: Int,
+        immediate: Int,
+        body: List<Instr>,
+        pc: Int,
+    ) {
+        val stack = store.valueStack
+        when (opcode) {
+            0x20 -> store.localStack.copyTo(
+                frame.localsBase + immediate,
+                stack,
+            )
+            0x21 -> stack.moveLastTo(
+                store.localStack,
+                frame.localsBase + immediate,
+            )
+            0x22 -> stack.copyTo(
+                stack.lastIndex,
+                store.localStack,
+                frame.localsBase + immediate,
+            )
+            0x41 -> stack.addLastI32(immediate)
+            0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)
+            0x46 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left == right) 1 else 0)
+            }
+            0x47 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left != right) 1 else 0)
+            }
+            0x48 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left < right) 1 else 0)
+            }
+            0x49 -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left < right) 1 else 0)
+            }
+            0x4A -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left > right) 1 else 0)
+            }
+            0x4B -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left > right) 1 else 0)
+            }
+            0x4C -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left <= right) 1 else 0)
+            }
+            0x4D -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left <= right) 1 else 0)
+            }
+            0x4E -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(if (left >= right) 1 else 0)
+            }
+            0x4F -> {
+                val right = stack.removeLastI32().toUInt()
+                val left = stack.removeLastI32().toUInt()
+                stack.addLastI32(if (left >= right) 1 else 0)
+            }
+            0x67 -> stack.addLastI32(clz32(stack.removeLastI32()))
+            0x68 -> stack.addLastI32(ctz32(stack.removeLastI32()))
+            0x69 -> stack.addLastI32(popcnt32(stack.removeLastI32()))
+            0x6A -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left + right)
+            }
+            0x6B -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left - right)
+            }
+            0x6C -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left * right)
+            }
+            0x6D -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(idiv(left, right))
+            }
+            0x6E -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(udiv(left, right))
+            }
+            0x6F -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(irem(left, right))
+            }
+            0x70 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(urem(left, right))
+            }
+            0x71 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left and right)
+            }
+            0x72 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left or right)
+            }
+            0x73 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(left xor right)
+            }
+            0x74 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(ishl(left, right))
+            }
+            0x75 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(isr(left, right))
+            }
+            0x76 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(ushr(left, right))
+            }
+            0x77 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(rotl(left, right))
+            }
+            0x78 -> {
+                val right = stack.removeLastI32()
+                val left = stack.removeLastI32()
+                stack.addLastI32(rotr(left, right))
+            }
+            else -> executeNonSuspendingHotInstructionOriginal(store, frame, body[pc])
+        }
+    }
+
+    @Suppress("NOTHING_TO_INLINE")
     private inline fun executeLinearHotInstruction(
         store: Store,
         frame: GuestCallFrame,
@@ -1242,6 +1715,19 @@ public class Interpreter : ResumableMachine {
      * opcode. Host calls, GC branch instructions, and reference branches
      * deliberately fall through to [executeInstruction].
      */
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun executeNonSuspendingHotInstructionOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        instruction: Instr,
+    ): FastInstructionResult = executeNonSuspendingHotInstruction(
+        store,
+        frame,
+        instruction,
+        frame.instance,
+        store.valueStack,
+    )
+
     private fun executeNonSuspendingHotInstruction(
         store: Store,
         frame: GuestCallFrame,

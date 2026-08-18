@@ -38,6 +38,21 @@ kotlin {
                 api(libs.kotlinx.coroutines.core)
             }
         }
+        androidMain {
+            kotlin.srcDir("src@android")
+        }
+        jvmMain {
+            kotlin.srcDir("src@jvm")
+        }
+        listOf(
+            "iosArm64Main",
+            "iosSimulatorArm64Main",
+            "linuxArm64Main",
+            "linuxX64Main",
+            "macosArm64Main",
+        ).forEach { sourceSetName ->
+            getByName(sourceSetName).kotlin.srcDir("src@native")
+        }
         commonTest {
             kotlin.srcDir("test")
             dependencies {
@@ -45,8 +60,18 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.core)
             }
         }
+        listOf(
+            "iosArm64Test",
+            "iosSimulatorArm64Test",
+            "linuxArm64Test",
+            "linuxX64Test",
+            "macosArm64Test",
+        ).forEach { sourceSetName ->
+            getByName(sourceSetName).kotlin.srcDir("test@native")
+        }
         jvmTest {
             kotlin.srcDir("jvmTest")
+            kotlin.srcDir("test@jvm")
         }
     }
 }
