@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly CHASM_REPOSITORY="https://github.com/CharlieTap/chasm.git"
-readonly CHASM_COMMIT="9e2e2fa50eef63c793473894633a00e5d58bcefe"
+readonly CHASM_COMMIT="bb24438fc665231d516db05f2fe702dbf6c76e24"
 readonly COREMARK_RELATIVE_PATH="benchmark/src/commonMain/resources/benchmark/coremark.wasm"
 readonly COREMARK_SHA256="77da1d88a16d432a6c74d3e60d1e239003f2adc1e50b31125507bb8e175af05a"
 

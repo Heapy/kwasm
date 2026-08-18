@@ -197,7 +197,7 @@ class PerformanceGateTest(unittest.TestCase):
                     "workload": workload,
                     "scoreMsPerOp": 3.0,
                     "upstreamCommit": (
-                        "9e2e2fa50eef63c793473894633a00e5d58bcefe"
+                        "bb24438fc665231d516db05f2fe702dbf6c76e24"
                     ),
                     "measurementCommand": "./gradlew benchmark",
                     "machine": "test machine",
@@ -312,7 +312,7 @@ class PerformanceGateTest(unittest.TestCase):
                     "workload": "fib35",
                     "scoreMsPerOp": 10.0,
                     "upstreamCommit": (
-                        "9e2e2fa50eef63c793473894633a00e5d58bcefe"
+                        "bb24438fc665231d516db05f2fe702dbf6c76e24"
                     ),
                     "measurementCommand": "./gradlew benchmark",
                     "machine": "test machine",

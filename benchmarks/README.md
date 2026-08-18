@@ -92,7 +92,7 @@ No third-party benchmark binary is vendored. Repositories and immutable
 commits for Sightglass methodology, EEMBC CoreMark, Chasm, and Chicory are in
 `upstreams.lock.json`. EEMBC distributes CoreMark under Apache-2.0 together
 with its acceptable-use and result-disclosure terms. The comparison uses the
-exact `coremark.wasm` fixture shipped by Chasm 1.4.8, records the commit that
+exact `coremark.wasm` fixture shipped by Chasm 1.6.1, records the commit that
 introduced it, and rejects any bytes whose SHA-256 is not the locked value.
 
 Prepare the immutable Chasm checkout:
