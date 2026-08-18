@@ -402,10 +402,6 @@ public class Interpreter : ResumableMachine {
                 superInstruction != 0 &&
                 stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             ) {
-                // Preserve the pre-existing trap location for a planned group.
-                // Plans containing division or memory operations can trap;
-                // the fused branch can transfer control.
-                control.pc = pc
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
                         executePlannedProducersCompareBrIfHoisted(
@@ -418,36 +414,38 @@ public class Interpreter : ResumableMachine {
                             pc,
                         )
                     ) {
-                        if (stack.size > maxValueStackSlots) {
-                            store.ensureValueStackLimit()
-                        }
                         if (
                             store.frames.lastOrNull() !== frame ||
                             frame.controls.lastOrNull() !== control
                         ) {
                             return
                         }
-                        pc = control.pc
+                        pc += plannedInstructionCount
                         continue
                     }
-                } else if (
-                    executePlannedSuperInstruction(
-                        instance,
-                        stack,
-                        locals,
-                        localsBase,
-                        i32ExpressionScratch,
-                        body,
-                        pc,
-                        superInstruction,
-                    )
-                ) {
-                    pc += plannedInstructionCount
-                    if (stack.size > maxValueStackSlots) {
-                        control.pc = pc
-                        store.ensureValueStackLimit()
+                } else {
+                    // Preserve the pre-existing trap location for a planned
+                    // group containing division or memory operations.
+                    control.pc = pc
+                    if (
+                        executePlannedSuperInstruction(
+                            instance,
+                            stack,
+                            locals,
+                            localsBase,
+                            i32ExpressionScratch,
+                            body,
+                            pc,
+                            superInstruction,
+                        )
+                    ) {
+                        pc += plannedInstructionCount
+                        if (stack.size > maxValueStackSlots) {
+                            control.pc = pc
+                            store.ensureValueStackLimit()
+                        }
+                        continue
                     }
-                    continue
                 }
             }
             val nextPc = pc + 1
@@ -561,10 +559,6 @@ public class Interpreter : ResumableMachine {
                 instructionsUntilCheckpoint > plannedInstructionCount &&
                 stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             if (canExecutePlannedInstruction) {
-                // Preserve the pre-existing trap location and countdown for a
-                // planned group, which can trap or transfer control.
-                control.pc = pc
-                store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     if (
                         executePlannedProducersCompareBrIfHoisted(
@@ -578,39 +572,42 @@ public class Interpreter : ResumableMachine {
                         )
                     ) {
                         instructionsUntilCheckpoint -= plannedInstructionCount
-                        store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
-                        if (stack.size > maxValueStackSlots) {
-                            store.ensureValueStackLimit()
-                        }
                         if (
                             store.frames.lastOrNull() !== frame ||
                             frame.controls.lastOrNull() !== control
                         ) {
+                            store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                             return LinearHotLoopResult.Complete
                         }
-                        pc = control.pc
+                        pc += plannedInstructionCount
                         continue
                     }
-                } else if (
-                    executePlannedSuperInstruction(
-                        instance,
-                        stack,
-                        locals,
-                        localsBase,
-                        i32ExpressionScratch,
-                        body,
-                        pc,
-                        superInstruction,
-                    )
-                ) {
-                    instructionsUntilCheckpoint -= plannedInstructionCount
-                    pc += plannedInstructionCount
-                    if (stack.size > maxValueStackSlots) {
-                        control.pc = pc
-                        store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
-                        store.ensureValueStackLimit()
+                } else {
+                    // Preserve the pre-existing trap location and countdown
+                    // for a planned group containing trapping operations.
+                    control.pc = pc
+                    store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                    if (
+                        executePlannedSuperInstruction(
+                            instance,
+                            stack,
+                            locals,
+                            localsBase,
+                            i32ExpressionScratch,
+                            body,
+                            pc,
+                            superInstruction,
+                        )
+                    ) {
+                        instructionsUntilCheckpoint -= plannedInstructionCount
+                        pc += plannedInstructionCount
+                        if (stack.size > maxValueStackSlots) {
+                            control.pc = pc
+                            store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                            store.ensureValueStackLimit()
+                        }
+                        continue
                     }
-                    continue
                 }
             }
             if (checkpointCompleted) {
@@ -723,8 +720,8 @@ public class Interpreter : ResumableMachine {
             }
         }
 
-        control.pc = pc + 4
         if (shouldBranch) {
+            control.pc = pc + 4
             // branch() requests a post-branch checkpoint only for Loop targets,
             // which the planned path rejects before advancing its PC.
             check(!branch(store, frame, branchInstruction.depth)) {
