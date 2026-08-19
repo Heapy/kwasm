@@ -769,7 +769,7 @@ public class Interpreter : ResumableMachine {
         if (shouldBranch) {
             val targetIndex = frame.controls.lastIndex - branchInstruction.depth
             if (
-                targetIndex in frame.controls.indices &&
+                targetIndex in 0 until frame.controls.size &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
                 return HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED
@@ -1095,7 +1095,7 @@ public class Interpreter : ResumableMachine {
         if (shouldBranch) {
             val targetIndex = frame.controls.lastIndex - branchInstruction.depth
             if (
-                targetIndex in frame.controls.indices &&
+                targetIndex in 0 until frame.controls.size &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
                 return false
@@ -1138,7 +1138,7 @@ public class Interpreter : ResumableMachine {
         if (shouldBranch) {
             val targetIndex = frame.controls.lastIndex - branchInstruction.depth
             if (
-                targetIndex in frame.controls.indices &&
+                targetIndex in 0 until frame.controls.size &&
                 frame.controls[targetIndex].kind == ControlKind.Loop
             ) {
                 return false

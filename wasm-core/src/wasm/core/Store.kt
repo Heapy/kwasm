@@ -310,9 +310,9 @@ public class Store(
     internal val localStack: RuntimeValueStack = RuntimeValueStack()
     internal val i32ExpressionScratch: IntArray =
         IntArray(MAX_LINEAR_I32_EXPRESSION_DEPTH)
-    internal val frames: ArrayDeque<GuestCallFrame> = ArrayDeque()
-    private val reusableFrames: ArrayDeque<GuestCallFrame> = ArrayDeque()
-    private val reusableControls: ArrayDeque<GuestControlFrame> = ArrayDeque()
+    internal val frames: RuntimeObjectStack<GuestCallFrame> = RuntimeObjectStack()
+    private val reusableFrames: RuntimeObjectStack<GuestCallFrame> = RuntimeObjectStack()
+    private val reusableControls: RuntimeObjectStack<GuestControlFrame> = RuntimeObjectStack()
     private val linearHotCodes: MutableList<Pair<List<Instr>, LinearHotCode>> = mutableListOf()
     private val packedLinearCodeBudget =
         PackedLinearCodeBudget(
@@ -1086,7 +1086,7 @@ public class Store(
                 localsBase,
                 localCount,
                 stackBase,
-                ArrayDeque(),
+                RuntimeObjectStack(),
             )
         frame.instance = instance
         frame.functionIndex = functionIndex
@@ -1131,10 +1131,20 @@ public class Store(
         }
     }
 
-    internal fun guestStack(): List<GuestStackFrame> =
-        frames.asReversed().map {
-            GuestStackFrame(it.functionIndex, it.functionName, it.currentInstructionIndex)
+    internal fun guestStack(): List<GuestStackFrame> {
+        val stack = ArrayList<GuestStackFrame>(frames.size)
+        for (index in frames.lastIndex downTo 0) {
+            val frame = frames[index]
+            stack.add(
+                GuestStackFrame(
+                    frame.functionIndex,
+                    frame.functionName,
+                    frame.currentInstructionIndex,
+                ),
+            )
         }
+        return stack
+    }
 
     /**
      * Suspend until the store parks at a snapshot-capturable suspension point.
@@ -1225,24 +1235,32 @@ public class Store(
         }
     }
 
+    private fun framesSpanOtherInstance(instance: Instance): Boolean {
+        for (index in 0 until frames.size) {
+            if (frames[index].instance !== instance) return true
+        }
+        return false
+    }
+
     private fun copySnapshotState(instance: Instance): RuntimeStoreSnapshot {
-        if (frames.any { it.instance !== instance }) {
+        if (framesSpanOtherInstance(instance)) {
             throw SnapshotStateException(
                 "the suspended frame stack spans an instance not being snapshotted",
             )
         }
 
-        val frameSnapshots = frames.map { frame ->
+        val frameSnapshots = ArrayList<RuntimeFrameSnapshot>(frames.size)
+        for (frameIndex in 0 until frames.size) {
+            val frame = frames[frameIndex]
             val function = instance.module.functions.getOrNull(
                 frame.functionIndex - instance.imports.functions.size,
             ) ?: throw SnapshotStateException(
                 "frame function ${frame.functionIndex} is not a local function in the snapshotted instance",
             )
-            RuntimeFrameSnapshot(
-                functionIndex = frame.functionIndex,
-                locals = localStack.toList(frame.localsBase, frame.localCount),
-                stackBase = frame.stackBase,
-                controls = frame.controls.map { control ->
+            val controlSnapshots = ArrayList<RuntimeControlSnapshot>(frame.controls.size)
+            for (controlIndex in 0 until frame.controls.size) {
+                val control = frame.controls[controlIndex]
+                controlSnapshots.add(
                     RuntimeControlSnapshot(
                         kind = control.kind.toRuntimeKind(),
                         bodyPath = findRuntimeBodyPath(function.body, control.body)
@@ -1255,8 +1273,16 @@ public class Store(
                         resultCount = control.resultCount,
                         labelArity = control.labelArity,
                         caughtException = control.caughtException,
-                    )
-                },
+                    ),
+                )
+            }
+            frameSnapshots.add(
+                RuntimeFrameSnapshot(
+                    functionIndex = frame.functionIndex,
+                    locals = localStack.toList(frame.localsBase, frame.localCount),
+                    stackBase = frame.stackBase,
+                    controls = controlSnapshots,
+                ),
             )
         }
         val pending = currentPendingImport?.let {
@@ -1379,7 +1405,7 @@ public class Store(
             val function = instance.module.functions[
                 frameSnapshot.functionIndex - instance.imports.functions.size
             ]
-            val controls = ArrayDeque<GuestControlFrame>()
+            val controls = RuntimeObjectStack<GuestControlFrame>()
             frameSnapshot.controls.forEach { control ->
                 val body = resolveRuntimeBody(function.body, control.bodyPath)
                 controls.addLast(
@@ -1734,6 +1760,81 @@ internal class PackedLinearCodeBudget(
     }
 }
 
+/**
+ * Flat array-backed LIFO stack for interpreter frames and their reuse pools.
+ *
+ * The guest frame stack, the per-frame control stack, and both reuse pools are
+ * pure push/pop structures. [ArrayDeque] pays for circular index arithmetic and
+ * modification counting on every operation, which is measurable on call-heavy
+ * guests; a flat array keeps each push and pop to a bounds check and one store.
+ */
+internal class RuntimeObjectStack<T : Any>(initialCapacity: Int = 8) {
+    private var elements: Array<Any?> = arrayOfNulls(initialCapacity)
+
+    var size: Int = 0
+        private set
+
+    val lastIndex: Int
+        get() = size - 1
+
+    fun isEmpty(): Boolean = size == 0
+
+    fun isNotEmpty(): Boolean = size != 0
+
+    operator fun get(index: Int): T {
+        checkIndex(index)
+        return elementAt(index)
+    }
+
+    fun firstOrNull(): T? = if (size == 0) null else elementAt(0)
+
+    fun last(): T = elementAt(checkedLastIndex())
+
+    fun lastOrNull(): T? = if (size == 0) null else elementAt(size - 1)
+
+    fun addLast(element: T) {
+        ensureCapacity(size + 1)
+        elements[size] = element
+        size++
+    }
+
+    fun removeLast(): T {
+        val index = checkedLastIndex()
+        val element = elementAt(index)
+        elements[index] = null
+        size = index
+        return element
+    }
+
+    fun removeLastOrNull(): T? = if (size == 0) null else removeLast()
+
+    fun clear() {
+        for (index in 0 until size) {
+            elements[index] = null
+        }
+        size = 0
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun elementAt(index: Int): T = elements[index] as T
+
+    private fun checkedLastIndex(): Int {
+        check(size > 0) { "object stack is empty" }
+        return size - 1
+    }
+
+    private fun checkIndex(index: Int) {
+        check(index in 0 until size) {
+            "object stack index $index is outside 0 until $size"
+        }
+    }
+
+    private fun ensureCapacity(required: Int) {
+        if (required <= elements.size) return
+        elements = elements.copyOf(maxOf(required, elements.size.coerceAtLeast(1) * 2))
+    }
+}
+
 internal class GuestControlFrame(
     var kind: ControlKind,
     var body: List<Instr>,
@@ -1755,7 +1856,7 @@ internal class GuestCallFrame(
     var localsBase: Int,
     var localCount: Int,
     var stackBase: Int,
-    val controls: ArrayDeque<GuestControlFrame>,
+    val controls: RuntimeObjectStack<GuestControlFrame>,
 ) {
     val currentInstructionIndex: Int
         get() = (controls.lastOrNull()?.pc ?: 1) - 1
