@@ -12,13 +12,6 @@ private const val HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L
 private const val HOISTED_COMPARE_BRANCH_TAKEN_DEPTH_MASK: Long = 0xFFFF_FFFFL
 private const val PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT: Int = 4
 
-private fun physicalValueStackLimit(maximumOperandSlots: Int, localSlots: Int): Int =
-    if (localSlots > Int.MAX_VALUE - maximumOperandSlots) {
-        Int.MAX_VALUE
-    } else {
-        maximumOperandSlots + localSlots
-    }
-
 /**
  * Suspendable interpreter whose value stack, call frames, and control frames
  * are heap data owned by [Store]. Guest calls never recurse on the host stack.
@@ -375,11 +368,7 @@ public class Interpreter : ResumableMachine {
         val plan = linearHotCode.plan
         val packedInstructions = linearHotCode.packedInstructions
         val stack = store.valueStack
-        val locals = if (USE_IN_PLACE_GUEST_PARAMETERS) stack else store.localStack
-        val physicalValueStackLimit = physicalValueStackLimit(
-            maxValueStackSlots,
-            store.valueStackLocalSlots,
-        )
+        val locals = store.localStack
         val i32ExpressionScratch = store.i32ExpressionScratch
         val localsBase = frame.localsBase
         val instance = frame.instance
@@ -416,8 +405,7 @@ public class Interpreter : ResumableMachine {
             val plannedInstructionCount = plannedInstructionCount(superInstruction)
             if (
                 superInstruction != 0 &&
-                stack.size + plannedValueStackDepth(superInstruction) <=
-                    physicalValueStackLimit
+                stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             ) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
@@ -460,7 +448,7 @@ public class Interpreter : ResumableMachine {
                         )
                     ) {
                         pc += plannedInstructionCount
-                        if (stack.size > physicalValueStackLimit) {
+                        if (stack.size > maxValueStackSlots) {
                             control.pc = pc
                             store.ensureValueStackLimit()
                         }
@@ -521,10 +509,8 @@ public class Interpreter : ResumableMachine {
                 )
                 pc = nextPc
             }
-            if (canonicalizeNaNs && stack.size > control.stackBase) {
-                canonicalizeTop(stack)
-            }
-            if (stack.size > physicalValueStackLimit) {
+            if (canonicalizeNaNs) canonicalizeTop(stack)
+            if (stack.size > maxValueStackSlots) {
                 control.pc = pc
                 store.ensureValueStackLimit()
             }
@@ -552,11 +538,7 @@ public class Interpreter : ResumableMachine {
         val plan = linearHotCode.plan
         val packedInstructions = linearHotCode.packedInstructions
         val stack = store.valueStack
-        val locals = if (USE_IN_PLACE_GUEST_PARAMETERS) stack else store.localStack
-        val physicalValueStackLimit = physicalValueStackLimit(
-            maxValueStackSlots,
-            store.valueStackLocalSlots,
-        )
+        val locals = store.localStack
         val i32ExpressionScratch = store.i32ExpressionScratch
         val localsBase = frame.localsBase
         val instance = frame.instance
@@ -599,8 +581,7 @@ public class Interpreter : ResumableMachine {
                 !checkpointCompleted &&
                 superInstruction != 0 &&
                 instructionsUntilCheckpoint > plannedInstructionCount &&
-                stack.size + plannedValueStackDepth(superInstruction) <=
-                    physicalValueStackLimit
+                stack.size + plannedValueStackDepth(superInstruction) <= maxValueStackSlots
             if (canExecutePlannedInstruction) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
@@ -648,7 +629,7 @@ public class Interpreter : ResumableMachine {
                     ) {
                         instructionsUntilCheckpoint -= plannedInstructionCount
                         pc += plannedInstructionCount
-                        if (stack.size > physicalValueStackLimit) {
+                        if (stack.size > maxValueStackSlots) {
                             control.pc = pc
                             store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                             store.ensureValueStackLimit()
@@ -736,10 +717,8 @@ public class Interpreter : ResumableMachine {
                 )
                 pc = nextPc
             }
-            if (canonicalizeNaNs && stack.size > control.stackBase) {
-                canonicalizeTop(stack)
-            }
-            if (stack.size > physicalValueStackLimit) {
+            if (canonicalizeNaNs) canonicalizeTop(stack)
+            if (stack.size > maxValueStackSlots) {
                 control.pc = pc
                 store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 store.ensureValueStackLimit()
@@ -809,10 +788,6 @@ public class Interpreter : ResumableMachine {
         val body = control.body
         val linearHotCode = control.linearHotCode
         val packedInstructions = linearHotCode.packedInstructions
-        val physicalValueStackLimit = physicalValueStackLimit(
-            store.config.limits.maxValueStackSlots,
-            store.valueStackLocalSlots,
-        )
         while (control.pc < body.size) {
             val pc = control.pc
             val instruction = if (packedInstructions == null) body[pc] else null
@@ -844,7 +819,7 @@ public class Interpreter : ResumableMachine {
             if (
                 superInstruction != 0 &&
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    physicalValueStackLimit
+                    store.config.limits.maxValueStackSlots
             ) {
                 if (
                     superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
@@ -856,7 +831,7 @@ public class Interpreter : ResumableMachine {
                         pc,
                     )
                 ) {
-                    store.ensureValueStackLimit(physicalValueStackLimit)
+                    store.ensureValueStackLimit()
                     if (
                         store.frames.lastOrNull() !== frame ||
                         frame.controls.lastOrNull() !== control
@@ -876,7 +851,7 @@ public class Interpreter : ResumableMachine {
                     )
                 ) {
                     control.pc += plannedInstructionCount(superInstruction)
-                    store.ensureValueStackLimit(physicalValueStackLimit)
+                    store.ensureValueStackLimit()
                     if (
                         superInstruction ==
                         LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
@@ -928,7 +903,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit(physicalValueStackLimit)
+            store.ensureValueStackLimit()
         }
     }
 
@@ -946,10 +921,6 @@ public class Interpreter : ResumableMachine {
         val body = control.body
         val linearHotCode = control.linearHotCode
         val packedInstructions = linearHotCode.packedInstructions
-        val physicalValueStackLimit = physicalValueStackLimit(
-            store.config.limits.maxValueStackSlots,
-            store.valueStackLocalSlots,
-        )
         var checkpointCompleted = checkpointCompletedForFirstInstruction
         while (control.pc < body.size) {
             val pc = control.pc
@@ -985,7 +956,7 @@ public class Interpreter : ResumableMachine {
                 superInstruction != 0 &&
                 store.instructionsUntilCheckpoint > plannedInstructionCount &&
                 store.valueStack.size + plannedValueStackDepth(superInstruction) <=
-                    physicalValueStackLimit
+                    store.config.limits.maxValueStackSlots
             if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                 if (
                     canExecutePlannedInstruction &&
@@ -997,7 +968,7 @@ public class Interpreter : ResumableMachine {
                         pc,
                     )
                 ) {
-                    store.ensureValueStackLimit(physicalValueStackLimit)
+                    store.ensureValueStackLimit()
                     if (
                         store.frames.lastOrNull() !== frame ||
                         frame.controls.lastOrNull() !== control
@@ -1019,7 +990,7 @@ public class Interpreter : ResumableMachine {
             ) {
                 store.instructionsUntilCheckpoint -= plannedInstructionCount
                 control.pc += plannedInstructionCount
-                store.ensureValueStackLimit(physicalValueStackLimit)
+                store.ensureValueStackLimit()
                 if (
                     superInstruction ==
                     LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
@@ -1085,7 +1056,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit(physicalValueStackLimit)
+            store.ensureValueStackLimit()
         }
         return LinearHotLoopResult.Complete
     }
@@ -1105,8 +1076,7 @@ public class Interpreter : ResumableMachine {
         val second = body[pc + 1]
         val operation = body[pc + 2] as Simple
         val branchInstruction = body[pc + 3] as BrIf
-        val locals =
-            if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack else store.localStack
+        val locals = store.localStack
         val left = locals.getI32(frame.localsBase + first.index)
         val right = if (second is I32Const) {
             second.value
@@ -1149,8 +1119,7 @@ public class Interpreter : ResumableMachine {
         val second = body[pc + 1]
         val operation = body[pc + 2] as Simple
         val branchInstruction = body[pc + 3] as BrIf
-        val locals =
-            if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack else store.localStack
+        val locals = store.localStack
         val left = locals.getI32(frame.localsBase + first.index)
         val right = if (second is I32Const) {
             second.value
@@ -1194,7 +1163,7 @@ public class Interpreter : ResumableMachine {
         frame.instance,
         control,
         store.valueStack,
-        if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack else store.localStack,
+        store.localStack,
         frame.localsBase,
         store.i32ExpressionScratch,
         body,
@@ -1611,19 +1580,18 @@ public class Interpreter : ResumableMachine {
         pc: Int,
     ) {
         val stack = store.valueStack
-        val locals = if (USE_IN_PLACE_GUEST_PARAMETERS) stack else store.localStack
         when (opcode) {
-            0x20 -> locals.copyTo(
+            0x20 -> store.localStack.copyTo(
                 frame.localsBase + immediate,
                 stack,
             )
             0x21 -> stack.moveLastTo(
-                locals,
+                store.localStack,
                 frame.localsBase + immediate,
             )
             0x22 -> stack.copyTo(
                 stack.lastIndex,
-                locals,
+                store.localStack,
                 frame.localsBase + immediate,
             )
             0x41 -> stack.addLastI32(immediate)
@@ -2440,13 +2408,10 @@ public class Interpreter : ResumableMachine {
             )
         }
         val function = instance.module.functions[functionIndex - instance.imports.functions.size]
-        val locals =
-            if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack else store.localStack
-        val localsBase =
-            if (USE_IN_PLACE_GUEST_PARAMETERS) inheritedBase else store.localStack.size
-        arguments.forEach(locals::addLast)
+        val localsBase = store.localStack.size
+        arguments.forEach(store.localStack::addLast)
         function.locals.forEach {
-            locals.addLast(zeroOf(it, instance.module))
+            store.localStack.addLast(zeroOf(it, instance.module))
         }
         pushGuestCallFrame(
             instance = instance,
@@ -2456,8 +2421,6 @@ public class Interpreter : ResumableMachine {
             localsBase = localsBase,
             localCount = arguments.size + function.locals.size,
             inheritedBase = inheritedBase,
-            operandBase =
-                if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack.size else inheritedBase,
             arguments = arguments,
         )
     }
@@ -2477,27 +2440,12 @@ public class Interpreter : ResumableMachine {
         val type = instance.functionType(functionIndex)
         val function = instance.module.functions[functionIndex - instance.imports.functions.size]
         val inheritedBase = store.valueStack.size - parameterCount
-        val listener = store.config.listener
-        val locals: RuntimeValueStack
-        val localsBase: Int
-        val listenerArguments: List<Value>?
-        if (USE_IN_PLACE_GUEST_PARAMETERS) {
-            locals = store.valueStack
-            localsBase = inheritedBase
-            listenerArguments = listener?.let {
-                store.valueStack.toList(localsBase, parameterCount)
-            }
-        } else {
-            locals = store.localStack
-            localsBase = store.localStack.size
-            store.valueStack.moveTopTo(store.localStack, parameterCount)
-            listenerArguments = listener?.let {
-                store.localStack.toList(localsBase, parameterCount)
-            }
-        }
+        val localsBase = store.localStack.size
+        store.valueStack.moveTopTo(store.localStack, parameterCount)
         function.locals.forEach {
-            locals.addLast(zeroOf(it, instance.module))
+            store.localStack.addLast(zeroOf(it, instance.module))
         }
+        val listener = store.config.listener
         pushGuestCallFrame(
             instance = instance,
             functionIndex = functionIndex,
@@ -2506,9 +2454,9 @@ public class Interpreter : ResumableMachine {
             localsBase = localsBase,
             localCount = parameterCount + function.locals.size,
             inheritedBase = inheritedBase,
-            operandBase =
-                if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack.size else inheritedBase,
-            arguments = listenerArguments,
+            arguments = listener?.let {
+                store.localStack.toList(localsBase, parameterCount)
+            },
         )
     }
 
@@ -2529,33 +2477,17 @@ public class Interpreter : ResumableMachine {
         val type = directCalls.types[localIndex]
         val parameterCount = directCalls.parameterCounts[localIndex]
         val inheritedBase = store.valueStack.size - parameterCount
-        val listener = store.config.listener
-        val locals: RuntimeValueStack
-        val localsBase: Int
-        val listenerArguments: List<Value>?
-        if (USE_IN_PLACE_GUEST_PARAMETERS) {
-            locals = store.valueStack
-            localsBase = inheritedBase
-            listenerArguments = listener?.let {
-                store.valueStack.toList(localsBase, parameterCount)
-            }
-        } else {
-            locals = store.localStack
-            localsBase = store.localStack.size
-            store.valueStack.moveTopTo(store.localStack, parameterCount)
-            listenerArguments = listener?.let {
-                store.localStack.toList(localsBase, parameterCount)
-            }
-        }
+        val localsBase = store.localStack.size
+        store.valueStack.moveTopTo(store.localStack, parameterCount)
         function.locals.forEach {
-            locals.addLast(zeroOf(it, instance.module))
+            store.localStack.addLast(zeroOf(it, instance.module))
         }
+        val listener = store.config.listener
         val root = store.acquireGuestControl(
             kind = ControlKind.Function,
             body = function.body,
             pc = 0,
-            stackBase =
-                if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack.size else inheritedBase,
+            stackBase = inheritedBase,
             parameterCount = 0,
             resultCount = type.results.size,
             labelArity = type.results.size,
@@ -2570,12 +2502,12 @@ public class Interpreter : ResumableMachine {
             stackBase = inheritedBase,
             root = root,
         )
-        store.addGuestFrame(frame)
-        if (listenerArguments != null) {
-            listener?.onCallStarted(
+        store.frames.addLast(frame)
+        if (listener != null) {
+            listener.onCallStarted(
                 instance,
                 functionIndex,
-                listenerArguments,
+                store.localStack.toList(localsBase, parameterCount),
             )
         }
     }
@@ -2588,7 +2520,6 @@ public class Interpreter : ResumableMachine {
         localsBase: Int,
         localCount: Int,
         inheritedBase: Int,
-        operandBase: Int,
         arguments: List<Value>?,
     ) {
         val store = instance.store
@@ -2596,7 +2527,7 @@ public class Interpreter : ResumableMachine {
             kind = ControlKind.Function,
             body = function.body,
             pc = 0,
-            stackBase = operandBase,
+            stackBase = inheritedBase,
             parameterCount = 0,
             resultCount = type.results.size,
             labelArity = type.results.size,
@@ -2611,7 +2542,7 @@ public class Interpreter : ResumableMachine {
             stackBase = inheritedBase,
             root = root,
         )
-        store.addGuestFrame(frame)
+        store.frames.addLast(frame)
         if (arguments != null) {
             store.config.listener?.onCallStarted(instance, functionIndex, arguments)
         }
@@ -2956,9 +2887,6 @@ public class Interpreter : ResumableMachine {
 
     private fun canonicalizeTop(store: Store) {
         if (!store.config.canonicalizeNaNs) return
-        val operandBase =
-            store.frames.lastOrNull()?.controls?.lastOrNull()?.stackBase ?: 0
-        if (store.valueStack.size <= operandBase) return
         canonicalizeTop(store.valueStack)
     }
 
@@ -3386,8 +3314,7 @@ public class Interpreter : ResumableMachine {
         ins: FcIndex,
         stack: RuntimeValueStack,
     ) {
-        val locals =
-            if (USE_IN_PLACE_GUEST_PARAMETERS) stack else instance.store.localStack
+        val locals = instance.store.localStack
         val localIndex = frame.localsBase + ins.index
         when (ins.opcode) {
             0x20 -> locals.copyTo(localIndex, stack)                            // local.get
