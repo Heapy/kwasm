@@ -2022,23 +2022,36 @@ public class Interpreter : ResumableMachine {
             }
             0x10 -> {
                 instruction as Call
-                val target =
-                    if (instance.isImportedFunction(instruction.funcIndex)) {
-                        resolveGuestTarget(
-                            requestedInstance = instance,
-                            requestedFunctionIndex = instruction.funcIndex,
-                        ) ?: return FastInstructionResult.NotHandled
-                    } else {
-                        null
-                    }
-                val targetInstance = target?.instance ?: instance
-                val targetIndex = target?.functionIndex ?: instruction.funcIndex
-                val type = targetInstance.functionType(targetIndex)
-                pushGuestCallFromStack(
-                    instance = targetInstance,
-                    functionIndex = targetIndex,
-                    parameterCount = type.params.size,
-                )
+                val directCalls =
+                    if (USE_FLAT_DIRECT_CALL_METADATA) instance.flatDirectCalls else null
+                if (
+                    directCalls != null &&
+                    instruction.funcIndex >= directCalls.importedFunctionCount
+                ) {
+                    pushLocalGuestCallDirect(
+                        instance,
+                        instruction.funcIndex,
+                        directCalls,
+                    )
+                } else {
+                    val target =
+                        if (instance.isImportedFunction(instruction.funcIndex)) {
+                            resolveGuestTarget(
+                                requestedInstance = instance,
+                                requestedFunctionIndex = instruction.funcIndex,
+                            ) ?: return FastInstructionResult.NotHandled
+                        } else {
+                            null
+                        }
+                    val targetInstance = target?.instance ?: instance
+                    val targetIndex = target?.functionIndex ?: instruction.funcIndex
+                    val type = targetInstance.functionType(targetIndex)
+                    pushGuestCallFromStack(
+                        instance = targetInstance,
+                        functionIndex = targetIndex,
+                        parameterCount = type.params.size,
+                    )
+                }
             }
             0x3F -> when (instruction) {
                 MemorySize -> execMemorySize(instance, 0, stack)
@@ -2445,6 +2458,58 @@ public class Interpreter : ResumableMachine {
                 store.localStack.toList(localsBase, parameterCount)
             },
         )
+    }
+
+    private fun pushLocalGuestCallDirect(
+        instance: Instance,
+        functionIndex: Int,
+        directCalls: FlatDirectCallTable,
+    ) {
+        val store = instance.store
+        if (store.frames.size >= store.config.limits.maxFrames) {
+            throw ExecutionTrap(
+                TrapKind.CALL_STACK_EXHAUSTED,
+                "frame count ${store.frames.size + 1} exceeds ${store.config.limits.maxFrames}",
+            )
+        }
+        val localIndex = functionIndex - directCalls.importedFunctionCount
+        val function = directCalls.functions[localIndex]
+        val type = directCalls.types[localIndex]
+        val parameterCount = directCalls.parameterCounts[localIndex]
+        val inheritedBase = store.valueStack.size - parameterCount
+        val localsBase = store.localStack.size
+        store.valueStack.moveTopTo(store.localStack, parameterCount)
+        function.locals.forEach {
+            store.localStack.addLast(zeroOf(it, instance.module))
+        }
+        val listener = store.config.listener
+        val root = store.acquireGuestControl(
+            kind = ControlKind.Function,
+            body = function.body,
+            pc = 0,
+            stackBase = inheritedBase,
+            parameterCount = 0,
+            resultCount = type.results.size,
+            labelArity = type.results.size,
+        )
+        val frame = store.acquireGuestFrame(
+            instance = instance,
+            functionIndex = functionIndex,
+            functionName = directCalls.functionNames[localIndex],
+            type = type,
+            localsBase = localsBase,
+            localCount = parameterCount + function.locals.size,
+            stackBase = inheritedBase,
+            root = root,
+        )
+        store.frames.addLast(frame)
+        if (listener != null) {
+            listener.onCallStarted(
+                instance,
+                functionIndex,
+                store.localStack.toList(localsBase, parameterCount),
+            )
+        }
     }
 
     private fun pushGuestCallFrame(

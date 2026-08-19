@@ -1,5 +1,13 @@
 package io.heapy.kwasm
 
+internal class FlatDirectCallTable(
+    val importedFunctionCount: Int,
+    val functions: Array<Function>,
+    val types: Array<FuncType>,
+    val parameterCounts: IntArray,
+    val functionNames: Array<String?>,
+)
+
 /**
  * A resolved module instance: holds runtime state (memories, tables, globals)
  * plus the resolved function index space (imports followed by locals).
@@ -14,6 +22,9 @@ public class Instance(
         this(Store(), module, imports)
 
     private val importsValidated: Unit = validateResolvedImports()
+
+    internal val flatDirectCalls: FlatDirectCallTable? =
+        if (USE_FLAT_DIRECT_CALL_METADATA) buildFlatDirectCallTable() else null
 
     public val memories: List<MemoryInstance> =
         (imports.memories + module.memories.map { MemoryInstance(it.type) })
@@ -35,6 +46,26 @@ public class Instance(
     public fun isImportedFunction(absIndex: Int): Boolean = absIndex < imports.functions.size
 
     internal fun importedFunction(absIndex: Int): HostImport = imports.functions[absIndex]
+
+    private fun buildFlatDirectCallTable(): FlatDirectCallTable {
+        val importedFunctionCount = imports.functions.size
+        val functions = module.functions.toTypedArray()
+        val types = Array(functions.size) { index ->
+            module.functionTypeByTypeIndex(functions[index].typeIndex)
+        }
+        val functionNames = arrayOfNulls<String>(functions.size)
+        val names = module.nameSection?.functionNames
+        for (index in functions.indices) {
+            functionNames[index] = names?.get(importedFunctionCount + index)
+        }
+        return FlatDirectCallTable(
+            importedFunctionCount = importedFunctionCount,
+            functions = functions,
+            types = types,
+            parameterCounts = IntArray(types.size) { types[it].params.size },
+            functionNames = functionNames,
+        )
+    }
 
     /** Exports indexed by name. */
     public val exportsByName: Map<String, Export> = module.exports.associateBy { it.name }
