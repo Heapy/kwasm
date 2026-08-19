@@ -452,6 +452,22 @@ public class Interpreter : ResumableMachine {
                             control.pc = pc
                             store.ensureValueStackLimit()
                         }
+                        if (
+                            superInstruction ==
+                            LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
+                        ) {
+                            control.pc = pc
+                            check(!branch(store, frame, (body[pc - 1] as Br).depth)) {
+                                "checkpoint-free planned branch requested a checkpoint"
+                            }
+                            if (
+                                store.frames.lastOrNull() !== frame ||
+                                frame.controls.lastOrNull() !== control
+                            ) {
+                                return
+                            }
+                            pc = control.pc
+                        }
                         continue
                     }
                 }
@@ -617,6 +633,24 @@ public class Interpreter : ResumableMachine {
                             control.pc = pc
                             store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                             store.ensureValueStackLimit()
+                        }
+                        if (
+                            superInstruction ==
+                            LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
+                        ) {
+                            control.pc = pc
+                            store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
+                            if (branch(store, frame, (body[pc - 1] as Br).depth)) {
+                                return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
+                            }
+                            if (
+                                store.frames.lastOrNull() !== frame ||
+                                frame.controls.lastOrNull() !== control
+                            ) {
+                                return LinearHotLoopResult.Complete
+                            }
+                            pc = control.pc
+                            instructionsUntilCheckpoint = store.instructionsUntilCheckpoint
                         }
                         continue
                     }
@@ -818,6 +852,26 @@ public class Interpreter : ResumableMachine {
                 ) {
                     control.pc += plannedInstructionCount(superInstruction)
                     store.ensureValueStackLimit()
+                    if (
+                        superInstruction ==
+                        LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
+                    ) {
+                        check(
+                            !branch(
+                                store,
+                                frame,
+                                (body[control.pc - 1] as Br).depth,
+                            ),
+                        ) {
+                            "checkpoint-free planned branch requested a checkpoint"
+                        }
+                        if (
+                            store.frames.lastOrNull() !== frame ||
+                            frame.controls.lastOrNull() !== control
+                        ) {
+                            return
+                        }
+                    }
                     continue
                 }
             }
@@ -937,6 +991,26 @@ public class Interpreter : ResumableMachine {
                 store.instructionsUntilCheckpoint -= plannedInstructionCount
                 control.pc += plannedInstructionCount
                 store.ensureValueStackLimit()
+                if (
+                    superInstruction ==
+                    LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
+                ) {
+                    if (
+                        branch(
+                            store,
+                            frame,
+                            (body[control.pc - 1] as Br).depth,
+                        )
+                    ) {
+                        return LinearHotLoopResult.RequiresSlowCheckpointAfterInstruction
+                    }
+                    if (
+                        store.frames.lastOrNull() !== frame ||
+                        frame.controls.lastOrNull() !== control
+                    ) {
+                        return LinearHotLoopResult.Complete
+                    }
+                }
                 continue
             }
             if (checkpointCompleted) {
@@ -1315,7 +1389,9 @@ public class Interpreter : ResumableMachine {
             )
         }
         when (plan) {
-            LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt() -> {
+            LINEAR_PLAN_PRODUCERS_BINARY_SET.toInt(),
+            LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt(),
+            -> {
                 val target = body[pc + 3] as FcIndex
                 locals.setI32(localsBase + target.index, result)
             }
@@ -1385,6 +1461,7 @@ public class Interpreter : ResumableMachine {
         -> 4
         LINEAR_PLAN_PRODUCERS_BINARY_BINARY_SET.toInt(),
         LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY.toInt(),
+        LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt(),
         -> 5
         LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt() -> 6
         LINEAR_PLAN_PRODUCERS_BINARY.toInt() -> 3

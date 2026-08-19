@@ -1,6 +1,7 @@
 package io.heapy.kwasm
 
 import io.heapy.kwasm.Instr.F32Const
+import io.heapy.kwasm.Instr.Br
 import io.heapy.kwasm.Instr.FcIndex
 import io.heapy.kwasm.Instr.I32Const
 import io.heapy.kwasm.Instr.Load
@@ -152,6 +153,22 @@ class PlannedTrapAttributionTest {
                 planPc = 1,
                 trapPc = 2,
                 body = listOf(I32Const(1), I32Const(0), Simple(0x6D)),
+            ),
+        )
+        add(
+            ForcedPlannedDivision(
+                name = "PRODUCERS_BINARY_SET_BR",
+                plan = LINEAR_PLAN_PRODUCERS_BINARY_SET_BR,
+                planPc = 0,
+                trapPc = 2,
+                results = emptyList(),
+                body = listOf(
+                    FcIndex(0x20, 0),
+                    I32Const(0),
+                    Simple(0x6D),
+                    FcIndex(0x21, 0),
+                    Br(0),
+                ),
             ),
         )
         addAll(

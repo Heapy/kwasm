@@ -887,7 +887,11 @@ public class Store(
                     operation.opcode.isPlannedI32Comparison() && fourth is Instr.BrIf ->
                         LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF
                     fourth is Instr.FcIndex && fourth.opcode == 0x21 ->
-                        LINEAR_PLAN_PRODUCERS_BINARY_SET
+                        if (body.getOrNull(index + 4) is Instr.Br) {
+                            LINEAR_PLAN_PRODUCERS_BINARY_SET_BR
+                        } else {
+                            LINEAR_PLAN_PRODUCERS_BINARY_SET
+                        }
                     fourth is Instr.Simple && fourth.opcode.isPlannedI32Binary() -> {
                         val fifth = body.getOrNull(index + 4)
                         when {
@@ -1642,6 +1646,7 @@ internal const val LINEAR_PLAN_LOCAL_I32_LOAD_TEE: Byte = -10
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET: Byte = -11
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE: Byte = -12
 internal const val LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF: Byte = -13
+internal const val LINEAR_PLAN_PRODUCERS_BINARY_SET_BR: Byte = -14
 internal const val LINEAR_PLAN_CONST_BINARY: Byte = 2
 internal const val LINEAR_PLAN_PRODUCERS_BINARY: Byte = 3
 internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY: Byte = 4

@@ -1,6 +1,7 @@
 package io.heapy.kwasm
 
 import io.heapy.kwasm.Instr.Block
+import io.heapy.kwasm.Instr.Br
 import io.heapy.kwasm.Instr.BrIf
 import io.heapy.kwasm.Instr.Call
 import io.heapy.kwasm.Instr.FcIndex
@@ -178,6 +179,49 @@ class InterpreterHotPathInvariantTest {
         assertEquals(
             LINEAR_PLAN_PRODUCERS_BINARY,
             Store().linearHotCode(arithmeticShape).plan.first(),
+        )
+    }
+
+    @Test
+    fun plannerFusesCounterUpdateWithItsBackedge() {
+        val updateAndBackedge = listOf<Instr>(
+            FcIndex(0x20, 0),
+            I32Const(1),
+            Simple(0x6A),
+            FcIndex(0x21, 0),
+            Br(0),
+        )
+        val updateWithoutBackedge = updateAndBackedge.dropLast(1)
+
+        assertEquals(
+            LINEAR_PLAN_PRODUCERS_BINARY_SET_BR,
+            Store().linearHotCode(updateAndBackedge).plan.first(),
+        )
+        assertEquals(
+            LINEAR_PLAN_PRODUCERS_BINARY_SET,
+            Store().linearHotCode(updateWithoutBackedge).plan.first(),
+        )
+    }
+
+    @Test
+    fun fusedCounterBackedgeMatchesFallbackStateAcrossCheckpointModes(): Unit = runBlocking {
+        val module = counterBackedgeModule()
+        for (mode in CheckpointMode.entries) {
+            val fused = invokeCounterBackedge(module, mode, fused = true)
+            val fallback = invokeCounterBackedge(module, mode, fused = false)
+
+            assertEquals(fallback, fused, mode.toString())
+            assertEquals(Value.I32(4), fused.result)
+        }
+    }
+
+    @Test
+    fun fusedCounterBackedgePreservesPauseResume(): Unit = runBlocking {
+        val module = counterBackedgeModule()
+
+        assertEquals(
+            invokeCounterBackedgeWithPause(module, fused = false),
+            invokeCounterBackedgeWithPause(module, fused = true),
         )
     }
 
@@ -601,6 +645,91 @@ class InterpreterHotPathInvariantTest {
         return CompareBranchTrace(result, checkpoints)
     }
 
+    private suspend fun invokeCounterBackedge(
+        module: Module,
+        mode: CheckpointMode,
+        fused: Boolean,
+    ): CounterBackedgeTrace {
+        val checkpoints = mutableListOf<Triple<Int?, Int?, Int>>()
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = 17,
+                checkpointMode = mode,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        checkpoints += Triple(
+                            functionIndex,
+                            instructionIndex,
+                            store.instructionsUntilCheckpoint,
+                        )
+                    }
+                },
+            ),
+        )
+        selectCounterBackedgePlan(store, module, fused)
+        val result = Instance(store, module, ResolvedImports())
+            .invoke("count", listOf(Value.I32(4)))
+            .single()
+        return CounterBackedgeTrace(result, checkpoints)
+    }
+
+    private suspend fun invokeCounterBackedgeWithPause(
+        module: Module,
+        fused: Boolean,
+    ): CounterBackedgeTrace = coroutineScope {
+        val checkpoints = mutableListOf<Triple<Int?, Int?, Int>>()
+        val pauseRequested = CompletableDeferred<PauseHandle>()
+        val store = Store(
+            StoreConfig(
+                checkpointInterval = 17,
+                listener = object : ExecutionListener {
+                    override fun onCheckpoint(
+                        store: Store,
+                        functionIndex: Int?,
+                        instructionIndex: Int?,
+                    ) {
+                        checkpoints += Triple(
+                            functionIndex,
+                            instructionIndex,
+                            store.instructionsUntilCheckpoint,
+                        )
+                        if (checkpoints.size == 2) {
+                            pauseRequested.complete(store.requestPause())
+                        }
+                    }
+                },
+            ),
+        )
+        selectCounterBackedgePlan(store, module, fused)
+        val invocation = async {
+            Instance(store, module, ResolvedImports())
+                .invoke("count", listOf(Value.I32(4)))
+                .single()
+        }
+        val pause = pauseRequested.await()
+        pause.awaitPaused()
+        assertEquals(StoreStatus.Paused, store.status.value)
+        pause.resume()
+        CounterBackedgeTrace(invocation.await(), checkpoints)
+    }
+
+    private fun selectCounterBackedgePlan(
+        store: Store,
+        module: Module,
+        fused: Boolean,
+    ) {
+        val functionBody = module.functions.single().body
+        val blockBody = (functionBody[2] as Block).body
+        val loopBody = (blockBody.single() as Loop).body
+        val plan = store.linearHotCode(loopBody).plan
+        assertEquals(LINEAR_PLAN_PRODUCERS_BINARY_SET_BR, plan[4])
+        if (!fused) plan[4] = LINEAR_PLAN_PRODUCERS_BINARY_SET
+    }
+
     private suspend fun compareBranchTrap(
         module: Module,
         mode: CheckpointMode,
@@ -795,6 +924,39 @@ class InterpreterHotPathInvariantTest {
         exports += Export("select", ExportDesc.Function(0))
     }
 
+    private fun counterBackedgeModule(): Module = validatedModule {
+        types += FuncType(listOf(ValType.I32), listOf(ValType.I32))
+        functions += Function(
+            typeIndex = 0,
+            locals = listOf(ValType.I32),
+            body = listOf(
+                I32Const(0),
+                FcIndex(0x21, 1),
+                Block(
+                    BlockType.Empty,
+                    listOf(
+                        Loop(
+                            BlockType.Empty,
+                            listOf(
+                                FcIndex(0x20, 1),
+                                FcIndex(0x20, 0),
+                                Simple(0x4F),
+                                BrIf(1),
+                                FcIndex(0x20, 1),
+                                I32Const(1),
+                                Simple(0x6A),
+                                FcIndex(0x21, 1),
+                                Br(0),
+                            ),
+                        ),
+                    ),
+                ),
+                FcIndex(0x20, 1),
+            ),
+        )
+        exports += Export("count", ExportDesc.Function(0))
+    }
+
     private fun loopCompareBranchModule(): Module = validatedModule {
         types += FuncType(emptyList(), listOf(ValType.I32))
         functions += Function(
@@ -906,6 +1068,11 @@ class InterpreterHotPathInvariantTest {
     private data class CompareBranchTrace(
         val result: Value,
         val checkpoints: List<Pair<Int?, Int?>>,
+    )
+
+    private data class CounterBackedgeTrace(
+        val result: Value,
+        val checkpoints: List<Triple<Int?, Int?, Int>>,
     )
 
     private data class PendingPauseCompareBranchTrace(
