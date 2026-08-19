@@ -159,6 +159,65 @@ jobs:
             benchmarks/build/performance/external-comparisons-${{ matrix.target }}.json
             benchmarks/build/performance/gate-${{ matrix.target }}.json
 
+  compiled-reference:
+    name: ${{ matrix.target }} Wasmtime compiled reference
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: jvm
+            runner: ubuntu-24.04
+          - target: linuxX64
+            runner: ubuntu-24.04
+          - target: macosArm64
+            runner: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6.2.0
+
+      - name: Prepare pinned fixtures and Wasmtime C runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          coremark_path="$(scripts/prepare-benchmark-upstreams.sh)"
+          wasmtime_runner="$(scripts/prepare-wasmtime-reference.sh)"
+          echo "KWASM_COREMARK_WASM=${coremark_path}" >> "$GITHUB_ENV"
+          echo "KWASM_WASMTIME_REFERENCE_RUNNER=${wasmtime_runner}" >> "$GITHUB_ENV"
+
+      - name: Run separate compiled-runtime reference
+        shell: bash
+        env:
+          KWASM_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          ./gradlew --stacktrace \
+            ":benchmarks:${KWASM_TARGET}CompiledReferenceReport"
+
+      - name: Upload compiled-reference evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compiled-reference-${{ matrix.target }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            benchmarks/build/reports/benchmarks/compiledReference/**/${{ matrix.target }}.json
+            benchmarks/build/performance/compiled-reference-kwasm-${{ matrix.target }}.json
+            benchmarks/build/performance/compiled-reference-wasmtime-raw-${{ matrix.target }}.json
+            benchmarks/build/performance/compiled-reference-${{ matrix.target }}.json
+
   native-image:
     name: GraalVM native-image smoke
     runs-on: ubuntu-24.04

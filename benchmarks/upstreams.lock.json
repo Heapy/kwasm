@@ -33,6 +33,21 @@
       "repository": "https://github.com/dylibso/chicory.git",
       "commit": "e2e2e4058f49fbffeffc5ea92c54b41534cb45d3",
       "purpose": "informational JVM interpreter/compiler comparison"
+    },
+    "wasmtime": {
+      "repository": "https://github.com/bytecodealliance/wasmtime.git",
+      "version": "45.0.0",
+      "commit": "377cd917af258d932d55b201a646917ecf193639",
+      "releaseUrl": "https://github.com/bytecodealliance/wasmtime/releases/tag/v45.0.0",
+      "engine": "cranelift",
+      "optimization": "speed",
+      "purpose": "informational optimizing-JIT ceiling; never an interpreter NFR gate",
+      "artifacts": {
+        "wasmtime-v45.0.0-aarch64-linux-c-api.tar.xz": "59794105fcdcd3d5dd496acc63a78cefa5fad63662b3efb9bcd21ee0616f4944",
+        "wasmtime-v45.0.0-aarch64-macos-c-api.tar.xz": "43cd87ec7d398f2e799e81c7d4e143d930e0139953d3c5d2a9c4055789f29851",
+        "wasmtime-v45.0.0-x86_64-linux-c-api.tar.xz": "95959e7a4cc4bfc12bbe45c9dea82cf45dd5b4321d9163e66343c50728429129",
+        "wasmtime-v45.0.0-x86_64-macos-c-api.tar.xz": "92d6b32a31711127fde10acbf5b984fa37b94052cec783a4fca6edd0bb8cdd6f"
+      }
     }
   }
 }

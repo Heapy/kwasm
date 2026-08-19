@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.JavaExec
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -161,6 +162,22 @@ benchmark {
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }
+        register("compiledReference") {
+            warmups = 3
+            iterations = 5
+            iterationTime = 1
+            iterationTimeUnit = "s"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
+            include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
+            include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
+            include("ExternalCoreMarkBenchmark")
+            advanced("jvmForks", 1)
+            advanced("nativeFork", "perBenchmark")
+            advanced("nativeGCAfterIteration", true)
+        }
     }
 
     targets {
@@ -172,18 +189,44 @@ benchmark {
 }
 
 val gateTool = layout.projectDirectory.file("tools/performance_gate.py")
+val compiledReferenceTool = layout.projectDirectory.file("tools/compiled_reference.py")
 val benchmarkTargets = listOf("jvm", "macosArm64", "linuxArm64", "linuxX64")
+val canonicalFixtureDirectory = layout.buildDirectory.dir("compiled-reference/fixtures")
+val fibFixture = canonicalFixtureDirectory.map { it.file("fib.wasm") }
+val shaFixture = canonicalFixtureDirectory.map { it.file("sha256.wasm") }
+val jsonFixture = canonicalFixtureDirectory.map { it.file("json.wasm") }
+val jvmMainCompilation = kotlin.targets.getByName("jvm").compilations.getByName("main")
+
+val exportBenchmarkFixtures = tasks.register<JavaExec>("exportBenchmarkFixtures") {
+    group = "benchmark"
+    description = "Export the generated canonical Wasm bytes for native runtime references."
+    dependsOn(jvmMainCompilation.compileTaskProvider)
+    classpath(jvmMainCompilation.output.allOutputs, jvmMainCompilation.runtimeDependencyFiles)
+    mainClass.set("io.heapy.kwasm.benchmarks.BenchmarkFixtureExporterKt")
+    outputs.files(fibFixture, shaFixture, jsonFixture)
+    doFirst {
+        setArgs(listOf(canonicalFixtureDirectory.get().asFile.absolutePath))
+    }
+}
 
 benchmarkTargets.forEach { target ->
     val capitalized = target.replaceFirstChar { it.uppercaseChar() }
     val rawReportRoot = layout.buildDirectory.dir("reports/benchmarks/main")
     val rawExternalReportRoot =
         layout.buildDirectory.dir("reports/benchmarks/externalComparison")
+    val rawCompiledReferenceReportRoot =
+        layout.buildDirectory.dir("reports/benchmarks/compiledReference")
     val normalizedReport = layout.buildDirectory.file("performance/current-$target.json")
     val normalizedExternalReport =
         layout.buildDirectory.file("performance/external-current-$target.json")
     val externalComparisonsReport =
         layout.buildDirectory.file("performance/external-comparisons-$target.json")
+    val normalizedCompiledReferenceReport =
+        layout.buildDirectory.file("performance/compiled-reference-kwasm-$target.json")
+    val rawWasmtimeReferenceReport =
+        layout.buildDirectory.file("performance/compiled-reference-wasmtime-raw-$target.json")
+    val compiledReferenceReport =
+        layout.buildDirectory.file("performance/compiled-reference-$target.json")
     val gateReport = layout.buildDirectory.file("performance/gate-$target.json")
 
     val normalize = tasks.register<Exec>("normalize${capitalized}Benchmark") {
@@ -227,6 +270,127 @@ benchmarkTargets.forEach { target ->
                 normalizedExternalReport.get().asFile.absolutePath,
             )
         }
+
+    val normalizeCompiledReference =
+        tasks.register<Exec>("normalize${capitalized}CompiledReference") {
+            group = "verification"
+            description = "Normalize canonical kwasm rows for the $target compiled reference."
+            dependsOn("${target}CompiledReferenceBenchmark")
+            inputs.dir(rawCompiledReferenceReportRoot)
+            inputs.file(gateTool)
+            outputs.file(normalizedCompiledReferenceReport)
+            commandLine(
+                "python3",
+                gateTool.asFile.absolutePath,
+                "normalize",
+                "--input-directory",
+                rawCompiledReferenceReportRoot.get().asFile.absolutePath,
+                "--target",
+                target,
+                "--output",
+                normalizedCompiledReferenceReport.get().asFile.absolutePath,
+            )
+        }
+
+    val runWasmtimeReference =
+        tasks.register<Exec>("run${capitalized}WasmtimeReference") {
+            val runnerPath = providers.environmentVariable("KWASM_WASMTIME_REFERENCE_RUNNER")
+            val coreMarkPath = providers.environmentVariable("KWASM_COREMARK_WASM")
+            val runnerPathValue = runnerPath.orNull.orEmpty()
+            val coreMarkPathValue = coreMarkPath.orNull.orEmpty()
+            group = "verification"
+            description = "Measure the pinned Wasmtime/Cranelift reference for $target."
+            dependsOn(exportBenchmarkFixtures)
+            mustRunAfter(normalizeCompiledReference)
+            inputs.file(compiledReferenceTool)
+            inputs.files(fibFixture, shaFixture, jsonFixture)
+            inputs.property("runnerPath", runnerPathValue)
+            inputs.property("coreMarkPath", coreMarkPathValue)
+            if (runnerPathValue.isNotEmpty()) {
+                inputs.file(runnerPathValue)
+            }
+            if (coreMarkPathValue.isNotEmpty()) {
+                inputs.file(coreMarkPathValue)
+            }
+            outputs.file(rawWasmtimeReferenceReport)
+            doFirst {
+                check(runnerPathValue.isNotEmpty()) {
+                    "KWASM_WASMTIME_REFERENCE_RUNNER must name the pinned Wasmtime runner"
+                }
+                check(coreMarkPathValue.isNotEmpty()) {
+                    "KWASM_COREMARK_WASM must name the checksum-pinned CoreMark fixture"
+                }
+                rawWasmtimeReferenceReport.get().asFile.parentFile.mkdirs()
+                commandLine(
+                    runnerPathValue,
+                    rawWasmtimeReferenceReport.get().asFile.absolutePath,
+                    target,
+                    fibFixture.get().asFile.absolutePath,
+                    shaFixture.get().asFile.absolutePath,
+                    jsonFixture.get().asFile.absolutePath,
+                    coreMarkPathValue,
+                    "fixed-coremark-100",
+                )
+            }
+        }
+
+    tasks.register<Exec>("${target}CompiledReferenceReport") {
+        val coreMarkPath = providers.environmentVariable("KWASM_COREMARK_WASM")
+        val machineDescription =
+            providers.environmentVariable("KWASM_BENCHMARK_MACHINE")
+                .orElse(
+                    "${System.getProperty("os.name")} " +
+                        "${System.getProperty("os.arch")} " +
+                        "${System.getProperty("os.version")}",
+                )
+        val coreMarkPathValue = coreMarkPath.orNull.orEmpty()
+        group = "verification"
+        description =
+            "Create the separate informational kwasm/Wasmtime report for $target."
+        dependsOn(normalizeCompiledReference, runWasmtimeReference)
+        inputs.file(normalizedCompiledReferenceReport)
+        inputs.file(rawWasmtimeReferenceReport)
+        inputs.file(compiledReferenceTool)
+        inputs.file(layout.projectDirectory.file("upstreams.lock.json"))
+        inputs.files(fibFixture, shaFixture, jsonFixture)
+        inputs.property("coreMarkPath", coreMarkPathValue)
+        inputs.property("machineDescription", machineDescription)
+        if (coreMarkPathValue.isNotEmpty()) {
+            inputs.file(coreMarkPathValue)
+        }
+        outputs.file(compiledReferenceReport)
+        doFirst {
+            check(coreMarkPathValue.isNotEmpty()) {
+                "KWASM_COREMARK_WASM must name the checksum-pinned CoreMark fixture"
+            }
+            commandLine(
+                "python3",
+                compiledReferenceTool.asFile.absolutePath,
+                "--kwasm",
+                normalizedCompiledReferenceReport.get().asFile.absolutePath,
+                "--wasmtime",
+                rawWasmtimeReferenceReport.get().asFile.absolutePath,
+                "--output",
+                compiledReferenceReport.get().asFile.absolutePath,
+                "--target",
+                target,
+                "--fib-wasm",
+                fibFixture.get().asFile.absolutePath,
+                "--sha-wasm",
+                shaFixture.get().asFile.absolutePath,
+                "--json-wasm",
+                jsonFixture.get().asFile.absolutePath,
+                "--coremark-wasm",
+                coreMarkPathValue,
+                "--machine",
+                machineDescription.get(),
+                "--measurement-command",
+                "./gradlew :benchmarks:${target}CompiledReferenceReport",
+                "--upstream-lock",
+                layout.projectDirectory.file("upstreams.lock.json").asFile.absolutePath,
+            )
+        }
+    }
 
     tasks.register<Exec>("${target}ExternalComparisonReport") {
         val coreMarkPath = providers.environmentVariable("KWASM_COREMARK_WASM")
@@ -336,7 +500,7 @@ benchmarkTargets.forEach { target ->
 
 tasks.register<Exec>("performanceGateToolTest") {
     group = "verification"
-    description = "Run the deterministic unit tests for the machine-readable performance gate."
+    description = "Run deterministic tests for the machine-readable performance tools."
     commandLine(
         "python3",
         "-m",

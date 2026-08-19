@@ -89,11 +89,12 @@ Run the deterministic gate-tool tests without executing benchmarks:
 ## CoreMark and external runtimes
 
 No third-party benchmark binary is vendored. Repositories and immutable
-commits for Sightglass methodology, EEMBC CoreMark, Chasm, and Chicory are in
-`upstreams.lock.json`. EEMBC distributes CoreMark under Apache-2.0 together
-with its acceptable-use and result-disclosure terms. The comparison uses the
-exact `coremark.wasm` fixture shipped by Chasm 1.6.1, records the commit that
-introduced it, and rejects any bytes whose SHA-256 is not the locked value.
+commits for Sightglass methodology, EEMBC CoreMark, Chasm, Chicory, and
+Wasmtime are in `upstreams.lock.json`. EEMBC distributes CoreMark under
+Apache-2.0 together with its acceptable-use and result-disclosure terms. The
+comparison uses the exact `coremark.wasm` fixture shipped by Chasm 1.6.1,
+records the commit that introduced it, and rejects any bytes whose SHA-256 is
+not the locked value.
 The fixture normally calibrates a different iteration count for each runtime,
 which is not comparable as wall time. The paired harness instead writes the
 same 100 iterations into both instances and supplies a deterministic 10-second
@@ -142,6 +143,39 @@ settings, the same commit and benchmark profile, and preserve the raw report,
 machine description, command, and timestamp. This follows the core
 same-machine principle of the
 [Sightglass methodology](https://github.com/bytecodealliance/sightglass).
+
+## Wasmtime compiled reference
+
+Wasmtime is intentionally measured in a separate informational profile. It is
+an optimizing JIT reference, not an interpreter peer, so its ratios never feed
+the Chasm `NFR-1` gate or the self-history gate. The pinned Wasmtime 45.0.0 C
+API release is configured explicitly for Cranelift with speed optimization.
+The runner compiles and instantiates each module before warm measurement,
+uses the same generated fib/SHA/JSON bytes and fixed-work CoreMark contract,
+and validates every result. Engine initialization and per-module
+compile/instantiate latency are recorded separately from warm `ms/op`.
+The tiny JSON row includes each runtime's checked public host-call boundary;
+for Kwasm that also includes its suspending API's `runBlocking` bridge.
+The report also records the deliberate semantic asymmetry: Kwasm uses
+production `CheckpointMode.Enabled`, while Wasmtime fuel metering is disabled.
+That makes this a compiled ceiling, not an overhead-equivalence claim.
+
+Prepare the checksum-pinned runner and fixtures, then create the report:
+
+```shell
+export KWASM_COREMARK_WASM="$(scripts/prepare-benchmark-upstreams.sh)"
+export KWASM_WASMTIME_REFERENCE_RUNNER="$(scripts/prepare-wasmtime-reference.sh)"
+
+./gradlew :benchmarks:jvmCompiledReferenceReport
+```
+
+Replace `jvm` with `macosArm64`, `linuxArm64`, or `linuxX64` on the matching
+host. The task first completes all kwasm samples and only then starts
+Wasmtime, preventing the two measurements from competing for the machine.
+Raw and normalized evidence is written to
+`benchmarks/build/performance/compiled-reference-*.json` and conforms to
+`baselines/compiled-reference.schema.json`. Its explicit `informational: true`
+and `gateStatus: not-a-gate` fields make accidental gate consumption visible.
 
 ## Native image
 

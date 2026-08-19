@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/heapy/kwasm/benchmarks/compiled-reference.schema.json",
+  "title": "kwasm and Wasmtime compiled-runtime reference",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "informational",
+    "gateStatus",
+    "comparisonClass",
+    "reason",
+    "target",
+    "machine",
+    "measurementCommand",
+    "measuredAtUtc",
+    "upstreamLock",
+    "protocol",
+    "wasmtime",
+    "geomeanKwasmOverWasmtime",
+    "records"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "kwasm-wasmtime-compiled-reference"
+    },
+    "informational": {
+      "const": true
+    },
+    "gateStatus": {
+      "const": "not-a-gate"
+    },
+    "comparisonClass": {
+      "const": "optimizing-jit-reference"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target": {
+      "enum": [
+        "jvm",
+        "macosArm64",
+        "linuxArm64",
+        "linuxX64"
+      ]
+    },
+    "machine": {
+      "type": "string",
+      "minLength": 1
+    },
+    "measurementCommand": {
+      "type": "string",
+      "minLength": 1
+    },
+    "measuredAtUtc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "upstreamLock": {
+      "type": "string",
+      "minLength": 1
+    },
+    "protocol": {
+      "type": "object",
+      "required": [
+        "warmupIterations",
+        "measurementIterations",
+        "targetIterationMilliseconds",
+        "kwasmCheckpointMode",
+        "wasmtimeFuelEnabled",
+        "hostCallBoundary",
+        "coreMarkIterations",
+        "coreMarkGuestElapsedMilliseconds"
+      ],
+      "properties": {
+        "warmupIterations": {
+          "const": 3
+        },
+        "measurementIterations": {
+          "const": 5
+        },
+        "targetIterationMilliseconds": {
+          "const": 1000
+        },
+        "kwasmCheckpointMode": {
+          "const": "Enabled"
+        },
+        "wasmtimeFuelEnabled": {
+          "const": false
+        },
+        "hostCallBoundary": {
+          "const": "checked-public-api"
+        },
+        "coreMarkIterations": {
+          "const": 100
+        },
+        "coreMarkGuestElapsedMilliseconds": {
+          "const": 10000
+        }
+      },
+      "additionalProperties": false
+    },
+    "wasmtime": {
+      "type": "object",
+      "required": [
+        "version",
+        "upstreamCommit",
+        "engine",
+        "optimization",
+        "artifact",
+        "artifactSha256",
+        "engineInitializationMs"
+      ],
+      "properties": {
+        "version": {
+          "const": "45.0.0"
+        },
+        "upstreamCommit": {
+          "const": "377cd917af258d932d55b201a646917ecf193639"
+        },
+        "engine": {
+          "const": "cranelift"
+        },
+        "optimization": {
+          "const": "speed"
+        },
+        "artifact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifactSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "engineInitializationMs": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "geomeanKwasmOverWasmtime": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "records": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "workload",
+          "fixtureSha256",
+          "kwasmBenchmark",
+          "kwasmScoreMsPerOp",
+          "kwasmScoreErrorMsPerOp",
+          "wasmtimeScoreMsPerOp",
+          "wasmtimeSamplesMsPerOp",
+          "wasmtimeOperationsPerSample",
+          "wasmtimeCompileInstantiateMs",
+          "kwasmOverWasmtime"
+        ],
+        "properties": {
+          "workload": {
+            "enum": [
+              "fib35",
+              "sha256",
+              "json",
+              "coremark"
+            ]
+          },
+          "fixtureSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "kwasmBenchmark": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kwasmScoreMsPerOp": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "kwasmScoreErrorMsPerOp": {
+            "type": "number",
+            "minimum": 0
+          },
+          "wasmtimeScoreMsPerOp": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "wasmtimeSamplesMsPerOp": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "wasmtimeOperationsPerSample": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "wasmtimeCompileInstantiateMs": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "kwasmOverWasmtime": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
