@@ -21,6 +21,8 @@
         "path": "benchmark/src/commonMain/resources/benchmark/coremark.wasm",
         "sha256": "77da1d88a16d432a6c74d3e60d1e239003f2adc1e50b31125507bb8e175af05a",
         "introducedByCommit": "1dae77217a3f0ea915e4c43eafc1a580469073d9",
+        "fixedIterations": 100,
+        "guestClockElapsedMilliseconds": 10000,
         "imports": [
           "env.clock_ms"
         ],

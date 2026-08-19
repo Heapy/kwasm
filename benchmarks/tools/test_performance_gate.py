@@ -188,7 +188,7 @@ class PerformanceGateTest(unittest.TestCase):
             },
         )
         comparisons = {
-            "schemaVersion": 1,
+            "schemaVersion": performance_gate.EXTERNAL_COMPARISON_SCHEMA_VERSION,
             "kind": "kwasm-external-comparisons",
             "records": [
                 {
@@ -202,6 +202,8 @@ class PerformanceGateTest(unittest.TestCase):
                     "measurementCommand": "./gradlew benchmark",
                     "machine": "test machine",
                     "measuredAtUtc": "2026-07-18T00:00:00Z",
+                    "coreMarkSha256": performance_gate.COREMARK_FIXTURE_SHA256,
+                    "coreMarkIterations": performance_gate.COREMARK_FIXED_ITERATIONS,
                 }
                 for workload in ("fib35", "sha256", "json", "coremark")
             ],
@@ -225,6 +227,7 @@ class PerformanceGateTest(unittest.TestCase):
             machine="test machine",
             measured_at_utc="2026-07-18T00:00:00Z",
             coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            coremark_iterations=performance_gate.COREMARK_FIXED_ITERATIONS,
             upstream_lock="../upstreams.lock.json",
         )
 
@@ -237,6 +240,15 @@ class PerformanceGateTest(unittest.TestCase):
         self.assertTrue(
             all(record["kwasmScoreMsPerOp"] > 0 for record in comparisons["records"]),
         )
+        coremark = next(
+            record
+            for record in comparisons["records"]
+            if record["workload"] == "coremark"
+        )
+        self.assertEqual(
+            performance_gate.COREMARK_FIXED_ITERATIONS,
+            coremark["coreMarkIterations"],
+        )
 
     def test_paired_external_scores_cover_coremark_absent_from_main_profile(self):
         comparisons = performance_gate.extract_external_comparisons(
@@ -245,6 +257,7 @@ class PerformanceGateTest(unittest.TestCase):
             machine="test machine",
             measured_at_utc="2026-07-18T00:00:00Z",
             coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            coremark_iterations=performance_gate.COREMARK_FIXED_ITERATIONS,
             upstream_lock="../upstreams.lock.json",
         )
 
@@ -275,6 +288,22 @@ class PerformanceGateTest(unittest.TestCase):
                 machine="test machine",
                 measured_at_utc="2026-07-18T00:00:00Z",
                 coremark_sha256="0" * 64,
+                coremark_iterations=performance_gate.COREMARK_FIXED_ITERATIONS,
+                upstream_lock="../upstreams.lock.json",
+            )
+
+    def test_external_extraction_rejects_adaptive_coremark_work(self):
+        with self.assertRaisesRegex(
+            performance_gate.GateInputError,
+            "fixed iteration count",
+        ):
+            performance_gate.extract_external_comparisons(
+                paired_external_normalized(),
+                measurement_command="./gradlew benchmark",
+                machine="test machine",
+                measured_at_utc="2026-07-18T00:00:00Z",
+                coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+                coremark_iterations=0,
                 upstream_lock="../upstreams.lock.json",
             )
 
@@ -285,9 +314,15 @@ class PerformanceGateTest(unittest.TestCase):
             machine="test machine",
             measured_at_utc="2026-07-18T00:00:00Z",
             coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            coremark_iterations=performance_gate.COREMARK_FIXED_ITERATIONS,
             upstream_lock="../upstreams.lock.json",
         )
-        comparisons["records"][0]["coreMarkSha256"] = "0" * 64
+        coremark = next(
+            record
+            for record in comparisons["records"]
+            if record["workload"] == "coremark"
+        )
+        coremark["coreMarkSha256"] = "0" * 64
 
         with self.assertRaisesRegex(
             performance_gate.GateInputError,
@@ -301,9 +336,38 @@ class PerformanceGateTest(unittest.TestCase):
                 enforce_snapshot_target=False,
             )
 
+    def test_paired_external_gate_rejects_tampered_coremark_iterations(self):
+        comparisons = performance_gate.extract_external_comparisons(
+            paired_external_normalized(),
+            measurement_command="./gradlew benchmark",
+            machine="test machine",
+            measured_at_utc="2026-07-18T00:00:00Z",
+            coremark_sha256=performance_gate.COREMARK_FIXTURE_SHA256,
+            coremark_iterations=performance_gate.COREMARK_FIXED_ITERATIONS,
+            upstream_lock="../upstreams.lock.json",
+        )
+        coremark = next(
+            record
+            for record in comparisons["records"]
+            if record["workload"] == "coremark"
+        )
+        coremark["coreMarkIterations"] = 0
+
+        with self.assertRaisesRegex(
+            performance_gate.GateInputError,
+            "fixed iteration count",
+        ):
+            performance_gate.verify_report(
+                normalized(),
+                baseline=None,
+                external_comparisons=comparisons,
+                max_regression_percent=10.0,
+                enforce_snapshot_target=False,
+            )
+
     def test_partial_chasm_rows_are_not_reported_as_proof(self):
         comparisons = {
-            "schemaVersion": 1,
+            "schemaVersion": performance_gate.EXTERNAL_COMPARISON_SCHEMA_VERSION,
             "kind": "kwasm-external-comparisons",
             "records": [
                 {

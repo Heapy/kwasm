@@ -94,6 +94,11 @@ commits for Sightglass methodology, EEMBC CoreMark, Chasm, and Chicory are in
 with its acceptable-use and result-disclosure terms. The comparison uses the
 exact `coremark.wasm` fixture shipped by Chasm 1.6.1, records the commit that
 introduced it, and rejects any bytes whose SHA-256 is not the locked value.
+The fixture normally calibrates a different iteration count for each runtime,
+which is not comparable as wall time. The paired harness instead writes the
+same 100 iterations into both instances and supplies a deterministic 10-second
+guest clock interval. The guest score remains a checksum/validity assertion;
+`kotlinx-benchmark` measures the real wall time for the identical fixed work.
 
 Prepare the immutable Chasm checkout:
 
@@ -113,8 +118,9 @@ For the NFR-1 comparison, `externalComparison` runs kwasm and the pinned
 Chasm KMP interpreter against the same module bytes and arguments in one
 process. It covers fib(35), SHA, JSON, and CoreMark on JVM and every declared
 Native benchmark target. The report task verifies the CoreMark checksum and
-records both scores, benchmark names, target, machine, command, UTC timestamp,
-and Chasm commit:
+fixed iteration count, then records both scores, benchmark names, target,
+machine, command, UTC timestamp, and Chasm commit. Schema v2 rejects older
+self-calibrated CoreMark reports:
 
 ```shell
 ./gradlew :benchmarks:jvmExternalComparisonReport

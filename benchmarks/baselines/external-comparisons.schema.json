@@ -12,7 +12,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "kind": {
       "const": "kwasm-external-comparisons"
@@ -88,6 +88,10 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
+          "coreMarkIterations": {
+            "type": "integer",
+            "const": 100
+          },
           "upstreamCommit": {
             "type": "string",
             "pattern": "^[0-9a-f]{40}$"
@@ -105,6 +109,30 @@
             "format": "date-time"
           }
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "runtime": {
+                  "const": "chasm"
+                },
+                "workload": {
+                  "const": "coremark"
+                }
+              },
+              "required": [
+                "runtime",
+                "workload"
+              ]
+            },
+            "then": {
+              "required": [
+                "coreMarkSha256",
+                "coreMarkIterations"
+              ]
+            }
+          }
+        ],
         "additionalProperties": false
       }
     }

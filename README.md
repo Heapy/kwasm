@@ -19,9 +19,9 @@ snapshotted.
 > and rejected as deferred features. CI contains pinned full-corpus,
 > cross-target, Kotlin/Wasm compiler/EH, nightly differential-fuzz, and
 > self-history performance and iOS incremental-footprint gates. The benchmark
-> harness enforces same-machine, checksum-pinned Chasm/CoreMark comparisons on
-> JVM and Native; current local evidence passes those performance gates and the
-> paired iOS footprint gate. An independent security review remains open; do
+> harness enforces same-machine, fixed-work, checksum-pinned Chasm/CoreMark
+> comparisons on JVM and Native, plus the paired iOS footprint gate. An
+> independent security review remains open; do
 > not deploy kwasm as a security boundary without that review.
 
 The implementation contract and requirement IDs live in

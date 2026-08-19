@@ -1,10 +1,14 @@
 package io.heapy.kwasm.benchmarks
 
 import io.github.charlietap.chasm.embedding.dsl.imports
+import io.github.charlietap.chasm.embedding.exports
 import io.github.charlietap.chasm.embedding.instance
 import io.github.charlietap.chasm.embedding.invoke
+import io.github.charlietap.chasm.embedding.memory.readInt as readChasmInt
+import io.github.charlietap.chasm.embedding.memory.writeInt as writeChasmInt
 import io.github.charlietap.chasm.embedding.module
 import io.github.charlietap.chasm.embedding.shapes.Instance
+import io.github.charlietap.chasm.embedding.shapes.Memory
 import io.github.charlietap.chasm.embedding.shapes.Store
 import io.github.charlietap.chasm.embedding.shapes.expect
 import io.github.charlietap.chasm.embedding.store
@@ -14,7 +18,6 @@ import kotlinx.benchmark.Benchmark
 import kotlinx.benchmark.Scope
 import kotlinx.benchmark.Setup
 import kotlinx.benchmark.State
-import kotlin.time.TimeSource
 
 /**
  * Same-process comparison rows for the Chasm interpreter pinned by
@@ -60,6 +63,7 @@ public open class PinnedChasmBenchmark {
             bytes = PlatformBinary.read(coreMarkPath),
             clockImport = true,
         )
+        coreMark.configureCoreMark()
     }
 
     @Benchmark
@@ -75,10 +79,8 @@ public open class PinnedChasmBenchmark {
         json.invokeI32("parse_json", BenchmarkFixtures.JSON_DOCUMENT.length)
 
     @Benchmark
-    public open fun coreMark(): Int =
-        coreMark.invoke("run").fold(1) { hash, value ->
-            31 * hash + value.hashCode()
-        }
+    public open fun coreMark(): Float =
+        CoreMarkFixture.requireValidScore(coreMark.invokeF32("run"))
 
     private companion object {
         const val SHA_ROUNDS: Int = 16_384
@@ -96,7 +98,7 @@ private class ChasmGuest(
     private val instance: Instance
 
     init {
-        val clockOrigin = TimeSource.Monotonic.markNow()
+        val clock = CoreMarkFixture.Clock()
         val resolvedImports =
             if (clockImport) {
                 imports(store) {
@@ -109,7 +111,7 @@ private class ChasmGuest(
                         reference {
                             listOf(
                                 NumberValue.I64(
-                                    clockOrigin.elapsedNow().inWholeMilliseconds,
+                                    clock.readMilliseconds(),
                                 ),
                             )
                         }
@@ -132,6 +134,28 @@ private class ChasmGuest(
             arguments.map { NumberValue.I32(it) },
         ).single()
         return (result as NumberValue.I32).value
+    }
+
+    fun invokeF32(export: String): Float {
+        val result = invoke(export).single()
+        return (result as NumberValue.F32).value
+    }
+
+    fun configureCoreMark() {
+        val memory = exports(instance)
+            .singleOrNull { it.name == "memory" }
+            ?.value as? Memory
+            ?: error("Chasm CoreMark module has no memory export 'memory'")
+        CoreMarkFixture.configureIterations(
+            readInt = { address ->
+                readChasmInt(store, memory, address)
+                    .expect("Chasm could not read CoreMark iterations")
+            },
+            writeInt = { address, value ->
+                writeChasmInt(store, memory, address, value)
+                    .expect("Chasm could not write CoreMark iterations")
+            },
+        )
     }
 
     fun invoke(

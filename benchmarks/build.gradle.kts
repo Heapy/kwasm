@@ -10,6 +10,7 @@ val hasCoreMarkAsset =
     providers.environmentVariable("KWASM_COREMARK_WASM")
         .map { it.isNotBlank() }
         .orElse(false)
+val coreMarkFixedIterations = 100
 
 kotlin {
     jvmToolchain(17)
@@ -245,6 +246,7 @@ benchmarkTargets.forEach { target ->
         inputs.file(normalizedExternalReport)
         inputs.file(gateTool)
         inputs.property("coreMarkPath", coreMarkPathValue)
+        inputs.property("coreMarkFixedIterations", coreMarkFixedIterations)
         inputs.property("machineDescription", machineDescriptionValue)
         if (coreMarkPathValue.isNotEmpty()) {
             inputs.file(coreMarkPathValue)
@@ -260,6 +262,8 @@ benchmarkTargets.forEach { target ->
             externalComparisonsReport.get().asFile.absolutePath,
             "--coremark-wasm",
             coreMarkPathValue,
+            "--coremark-iterations",
+            coreMarkFixedIterations.toString(),
             "--measurement-command",
             "./gradlew :benchmarks:${target}ExternalComparisonBenchmark",
             "--machine",

@@ -6,8 +6,48 @@ import io.heapy.kwasm.Module
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class BenchmarkFixturesTest {
+    @Test
+    fun coreMarkContractUsesFixedWorkAndDeterministicGuestTime() {
+        var iterations = 0
+        CoreMarkFixture.configureIterations(
+            readInt = { address ->
+                when (address) {
+                    812 -> 2_840
+                    2_840 -> iterations
+                    else -> error("unexpected CoreMark address $address")
+                }
+            },
+            writeInt = { address, value ->
+                assertEquals(2_840, address)
+                iterations = value
+            },
+        )
+
+        assertEquals(CoreMarkFixture.FIXED_ITERATIONS, iterations)
+        val clock = CoreMarkFixture.Clock()
+        assertEquals(0L, clock.readMilliseconds())
+        assertEquals(10_000L, clock.readMilliseconds())
+        assertEquals(20_000L, clock.readMilliseconds())
+        assertEquals(10f, CoreMarkFixture.requireValidScore(10f))
+        assertFailsWith<IllegalStateException> {
+            CoreMarkFixture.requireValidScore(0f)
+        }
+    }
+
+    @Test
+    fun coreMarkRuntimesExecuteTheSameFixedWorkWhenFixtureIsAvailable() {
+        if (PlatformBinary.environment("KWASM_COREMARK_WASM").isNullOrBlank()) return
+
+        val kwasm = ExternalCoreMarkBenchmark().apply { prepare() }
+        val chasm = PinnedChasmBenchmark().apply { prepare() }
+
+        assertEquals(10f, kwasm.coreMarkWasm())
+        assertEquals(10f, chasm.coreMark())
+    }
+
     @Test
     fun fibFixtureExecutesTheRequiredGuestAlgorithm(): Unit = runBlocking {
         val instance = BenchmarkFixtures.instance(BenchmarkFixtures.fibModule)

@@ -14,6 +14,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = 1
+EXTERNAL_COMPARISON_SCHEMA_VERSION = 2
 SNAPSHOT_GIB = 64 / 1024
 CHECKPOINT_LIMIT = 1.05
 STARTUP_JVM_LIMIT_MS = 150.0
@@ -70,6 +71,7 @@ NFR_CHASM_WORKLOADS = frozenset(CANONICAL_EXTERNAL_WORKLOADS)
 COREMARK_FIXTURE_SHA256 = (
     "77da1d88a16d432a6c74d3e60d1e239003f2adc1e50b31125507bb8e175af05a"
 )
+COREMARK_FIXED_ITERATIONS = 100
 PINNED_EXTERNAL_COMMITS = {
     "chasm": "bb24438fc665231d516db05f2fe702dbf6c76e24",
     "chicory-interpreter": "e2e2e4058f49fbffeffc5ea92c54b41534cb45d3",
@@ -222,6 +224,7 @@ def extract_external_comparisons(
     machine: str,
     measured_at_utc: str,
     coremark_sha256: str,
+    coremark_iterations: int,
     upstream_lock: str,
 ) -> dict[str, Any]:
     report = _validate_normalized(report, "paired external comparison report")
@@ -237,6 +240,13 @@ def extract_external_comparisons(
         raise GateInputError(
             "CoreMark fixture checksum does not match the pinned Chasm asset",
         )
+    if (
+        type(coremark_iterations) is not int or
+        coremark_iterations != COREMARK_FIXED_ITERATIONS
+    ):
+        raise GateInputError(
+            "CoreMark comparison does not use the pinned fixed iteration count",
+        )
     scores = _scores(report)
     target = str(report.get("target"))
     records = []
@@ -249,24 +259,25 @@ def extract_external_comparisons(
             scores,
             CHASM_EXTERNAL_WORKLOADS[workload],
         )
-        records.append(
-            {
-                "runtime": "chasm",
-                "target": target,
-                "workload": workload,
-                "scoreMsPerOp": chasm_score,
-                "kwasmScoreMsPerOp": kwasm_score,
-                "kwasmBenchmark": kwasm_name,
-                "externalBenchmark": chasm_name,
-                "upstreamCommit": PINNED_EXTERNAL_COMMITS["chasm"],
-                "coreMarkSha256": coremark_sha256,
-                "measurementCommand": measurement_command,
-                "machine": machine,
-                "measuredAtUtc": measured_at_utc,
-            },
-        )
+        record = {
+            "runtime": "chasm",
+            "target": target,
+            "workload": workload,
+            "scoreMsPerOp": chasm_score,
+            "kwasmScoreMsPerOp": kwasm_score,
+            "kwasmBenchmark": kwasm_name,
+            "externalBenchmark": chasm_name,
+            "upstreamCommit": PINNED_EXTERNAL_COMMITS["chasm"],
+            "measurementCommand": measurement_command,
+            "machine": machine,
+            "measuredAtUtc": measured_at_utc,
+        }
+        if workload == "coremark":
+            record["coreMarkSha256"] = coremark_sha256
+            record["coreMarkIterations"] = coremark_iterations
+        records.append(record)
     return {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": EXTERNAL_COMPARISON_SCHEMA_VERSION,
         "kind": "kwasm-external-comparisons",
         "upstreamLock": upstream_lock,
         "measurementStatus": "measured",
@@ -440,7 +451,10 @@ def _external_gate(
             "reason": "no pinned external comparison report was supplied",
             "comparisons": [],
         }
-    if not isinstance(comparisons, dict) or comparisons.get("schemaVersion") != SCHEMA_VERSION:
+    if (
+        not isinstance(comparisons, dict) or
+        comparisons.get("schemaVersion") != EXTERNAL_COMPARISON_SCHEMA_VERSION
+    ):
         raise GateInputError("external comparison report has an unsupported schema")
     if comparisons.get("kind") != "kwasm-external-comparisons":
         raise GateInputError("external comparison report has an unsupported kind")
@@ -470,6 +484,20 @@ def _external_gate(
         suffix = CANONICAL_EXTERNAL_WORKLOADS.get(workload)
         if suffix is None:
             raise GateInputError(f"unsupported canonical external workload {workload!r}")
+        if runtime == "chasm" and workload == "coremark":
+            if record.get("coreMarkSha256") != COREMARK_FIXTURE_SHA256:
+                raise GateInputError(
+                    "external chasm/coremark record is not from the pinned "
+                    "CoreMark fixture",
+                )
+            if (
+                type(record.get("coreMarkIterations")) is not int or
+                record.get("coreMarkIterations") != COREMARK_FIXED_ITERATIONS
+            ):
+                raise GateInputError(
+                    "external chasm/coremark record does not use the pinned "
+                    "fixed iteration count",
+                )
         paired_score = record.get("kwasmScoreMsPerOp")
         if paired_score is not None:
             current_name = record.get("kwasmBenchmark")
@@ -491,14 +519,6 @@ def _external_gate(
                 raise GateInputError(
                     f"external {runtime}/{workload} record has no matching "
                     "externalBenchmark",
-                )
-            if (
-                runtime == "chasm" and
-                record.get("coreMarkSha256") != COREMARK_FIXTURE_SHA256
-            ):
-                raise GateInputError(
-                    f"external {runtime}/{workload} record is not from the "
-                    "pinned CoreMark fixture",
                 )
             current_score = _finite_positive(
                 paired_score,
@@ -657,6 +677,7 @@ def _extract_external_command(arguments: argparse.Namespace) -> int:
         machine=arguments.machine,
         measured_at_utc=measured_at_utc,
         coremark_sha256=coremark_sha256,
+        coremark_iterations=arguments.coremark_iterations,
         upstream_lock=arguments.upstream_lock,
     )
     _write_json(arguments.output, result)
@@ -683,6 +704,7 @@ def _parser() -> argparse.ArgumentParser:
     extract_external.add_argument("--input", type=pathlib.Path, required=True)
     extract_external.add_argument("--output", type=pathlib.Path, required=True)
     extract_external.add_argument("--coremark-wasm", type=pathlib.Path, required=True)
+    extract_external.add_argument("--coremark-iterations", type=int, required=True)
     extract_external.add_argument("--measurement-command", required=True)
     extract_external.add_argument("--machine", required=True)
     extract_external.add_argument("--measured-at-utc")

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "kwasm-external-comparisons",
   "upstreamLock": "../upstreams.lock.json",
   "measurementStatus": "unmeasured",
