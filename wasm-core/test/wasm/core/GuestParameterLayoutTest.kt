@@ -205,16 +205,17 @@ class GuestParameterLayoutTest {
             )
             exports += Export("value", ExportDesc.Function(0))
         }
-        val store = Store(
-            StoreConfig(
-                limits = ExecutionLimits(maxValueStackSlots = 1),
-            ),
-        )
-
-        assertEquals(
-            listOf(Value.I32(42)),
-            Instance(store, module, ResolvedImports()).invoke("value"),
-        )
+        for (limit in listOf(1, Int.MAX_VALUE)) {
+            val store = Store(
+                StoreConfig(
+                    limits = ExecutionLimits(maxValueStackSlots = limit),
+                ),
+            )
+            assertEquals(
+                listOf(Value.I32(42)),
+                Instance(store, module, ResolvedImports()).invoke("value"),
+            )
+        }
     }
 
     @Test

@@ -12,6 +12,13 @@ private const val HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L
 private const val HOISTED_COMPARE_BRANCH_TAKEN_DEPTH_MASK: Long = 0xFFFF_FFFFL
 private const val PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT: Int = 4
 
+private fun physicalValueStackLimit(maximumOperandSlots: Int, localSlots: Int): Int =
+    if (localSlots > Int.MAX_VALUE - maximumOperandSlots) {
+        Int.MAX_VALUE
+    } else {
+        maximumOperandSlots + localSlots
+    }
+
 /**
  * Suspendable interpreter whose value stack, call frames, and control frames
  * are heap data owned by [Store]. Guest calls never recurse on the host stack.
@@ -369,7 +376,10 @@ public class Interpreter : ResumableMachine {
         val packedInstructions = linearHotCode.packedInstructions
         val stack = store.valueStack
         val locals = if (USE_IN_PLACE_GUEST_PARAMETERS) stack else store.localStack
-        val valueStackLocalSlots = store.valueStackLocalSlots
+        val physicalValueStackLimit = physicalValueStackLimit(
+            maxValueStackSlots,
+            store.valueStackLocalSlots,
+        )
         val i32ExpressionScratch = store.i32ExpressionScratch
         val localsBase = frame.localsBase
         val instance = frame.instance
@@ -406,8 +416,8 @@ public class Interpreter : ResumableMachine {
             val plannedInstructionCount = plannedInstructionCount(superInstruction)
             if (
                 superInstruction != 0 &&
-                stack.size - valueStackLocalSlots +
-                    plannedValueStackDepth(superInstruction) <= maxValueStackSlots
+                stack.size + plannedValueStackDepth(superInstruction) <=
+                    physicalValueStackLimit
             ) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
@@ -450,7 +460,7 @@ public class Interpreter : ResumableMachine {
                         )
                     ) {
                         pc += plannedInstructionCount
-                        if (stack.size - valueStackLocalSlots > maxValueStackSlots) {
+                        if (stack.size > physicalValueStackLimit) {
                             control.pc = pc
                             store.ensureValueStackLimit()
                         }
@@ -514,7 +524,7 @@ public class Interpreter : ResumableMachine {
             if (canonicalizeNaNs && stack.size > control.stackBase) {
                 canonicalizeTop(stack)
             }
-            if (stack.size - valueStackLocalSlots > maxValueStackSlots) {
+            if (stack.size > physicalValueStackLimit) {
                 control.pc = pc
                 store.ensureValueStackLimit()
             }
@@ -543,7 +553,10 @@ public class Interpreter : ResumableMachine {
         val packedInstructions = linearHotCode.packedInstructions
         val stack = store.valueStack
         val locals = if (USE_IN_PLACE_GUEST_PARAMETERS) stack else store.localStack
-        val valueStackLocalSlots = store.valueStackLocalSlots
+        val physicalValueStackLimit = physicalValueStackLimit(
+            maxValueStackSlots,
+            store.valueStackLocalSlots,
+        )
         val i32ExpressionScratch = store.i32ExpressionScratch
         val localsBase = frame.localsBase
         val instance = frame.instance
@@ -586,8 +599,8 @@ public class Interpreter : ResumableMachine {
                 !checkpointCompleted &&
                 superInstruction != 0 &&
                 instructionsUntilCheckpoint > plannedInstructionCount &&
-                stack.size - valueStackLocalSlots +
-                    plannedValueStackDepth(superInstruction) <= maxValueStackSlots
+                stack.size + plannedValueStackDepth(superInstruction) <=
+                    physicalValueStackLimit
             if (canExecutePlannedInstruction) {
                 if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                     when (
@@ -635,7 +648,7 @@ public class Interpreter : ResumableMachine {
                     ) {
                         instructionsUntilCheckpoint -= plannedInstructionCount
                         pc += plannedInstructionCount
-                        if (stack.size - valueStackLocalSlots > maxValueStackSlots) {
+                        if (stack.size > physicalValueStackLimit) {
                             control.pc = pc
                             store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                             store.ensureValueStackLimit()
@@ -726,7 +739,7 @@ public class Interpreter : ResumableMachine {
             if (canonicalizeNaNs && stack.size > control.stackBase) {
                 canonicalizeTop(stack)
             }
-            if (stack.size - valueStackLocalSlots > maxValueStackSlots) {
+            if (stack.size > physicalValueStackLimit) {
                 control.pc = pc
                 store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
                 store.ensureValueStackLimit()
@@ -796,7 +809,10 @@ public class Interpreter : ResumableMachine {
         val body = control.body
         val linearHotCode = control.linearHotCode
         val packedInstructions = linearHotCode.packedInstructions
-        val valueStackLocalSlots = store.valueStackLocalSlots
+        val physicalValueStackLimit = physicalValueStackLimit(
+            store.config.limits.maxValueStackSlots,
+            store.valueStackLocalSlots,
+        )
         while (control.pc < body.size) {
             val pc = control.pc
             val instruction = if (packedInstructions == null) body[pc] else null
@@ -827,9 +843,8 @@ public class Interpreter : ResumableMachine {
             val superInstruction = linearHotCode.plan[pc].toInt()
             if (
                 superInstruction != 0 &&
-                store.valueStack.size - valueStackLocalSlots +
-                    plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    physicalValueStackLimit
             ) {
                 if (
                     superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt() &&
@@ -841,7 +856,7 @@ public class Interpreter : ResumableMachine {
                         pc,
                     )
                 ) {
-                    store.ensureValueStackLimit()
+                    store.ensureValueStackLimit(physicalValueStackLimit)
                     if (
                         store.frames.lastOrNull() !== frame ||
                         frame.controls.lastOrNull() !== control
@@ -861,7 +876,7 @@ public class Interpreter : ResumableMachine {
                     )
                 ) {
                     control.pc += plannedInstructionCount(superInstruction)
-                    store.ensureValueStackLimit()
+                    store.ensureValueStackLimit(physicalValueStackLimit)
                     if (
                         superInstruction ==
                         LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
@@ -913,7 +928,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            store.ensureValueStackLimit(physicalValueStackLimit)
         }
     }
 
@@ -931,7 +946,10 @@ public class Interpreter : ResumableMachine {
         val body = control.body
         val linearHotCode = control.linearHotCode
         val packedInstructions = linearHotCode.packedInstructions
-        val valueStackLocalSlots = store.valueStackLocalSlots
+        val physicalValueStackLimit = physicalValueStackLimit(
+            store.config.limits.maxValueStackSlots,
+            store.valueStackLocalSlots,
+        )
         var checkpointCompleted = checkpointCompletedForFirstInstruction
         while (control.pc < body.size) {
             val pc = control.pc
@@ -966,9 +984,8 @@ public class Interpreter : ResumableMachine {
                 !checkpointCompleted &&
                 superInstruction != 0 &&
                 store.instructionsUntilCheckpoint > plannedInstructionCount &&
-                store.valueStack.size - valueStackLocalSlots +
-                    plannedValueStackDepth(superInstruction) <=
-                    store.config.limits.maxValueStackSlots
+                store.valueStack.size + plannedValueStackDepth(superInstruction) <=
+                    physicalValueStackLimit
             if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                 if (
                     canExecutePlannedInstruction &&
@@ -980,7 +997,7 @@ public class Interpreter : ResumableMachine {
                         pc,
                     )
                 ) {
-                    store.ensureValueStackLimit()
+                    store.ensureValueStackLimit(physicalValueStackLimit)
                     if (
                         store.frames.lastOrNull() !== frame ||
                         frame.controls.lastOrNull() !== control
@@ -1002,7 +1019,7 @@ public class Interpreter : ResumableMachine {
             ) {
                 store.instructionsUntilCheckpoint -= plannedInstructionCount
                 control.pc += plannedInstructionCount
-                store.ensureValueStackLimit()
+                store.ensureValueStackLimit(physicalValueStackLimit)
                 if (
                     superInstruction ==
                     LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt()
@@ -1068,7 +1085,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             if (canonicalizeNaNs) canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            store.ensureValueStackLimit(physicalValueStackLimit)
         }
         return LinearHotLoopResult.Complete
     }

@@ -759,6 +759,16 @@ public class Store(
         }
     }
 
+    internal fun ensureValueStackLimit(physicalLimit: Int) {
+        if (valueStack.size > physicalLimit) {
+            val operandSlots = operandStackSize
+            throw ExecutionTrap(
+                TrapKind.STACK_EXHAUSTED,
+                "value stack has $operandSlots slots; maximum is ${config.limits.maxValueStackSlots}",
+            )
+        }
+    }
+
     internal fun acquireGuestControl(
         kind: ControlKind,
         body: List<Instr>,
