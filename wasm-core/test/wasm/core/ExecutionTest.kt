@@ -673,6 +673,117 @@ class ExecutionTest {
         )
     }
 
+    @Test
+    fun budgetedFuelChargesTheSameTotalAtEveryCheckpointInterval(): Unit = runBlocking {
+        val module = countingLoopModule()
+        val charged = CHECKPOINT_INTERVALS.map { interval ->
+            consumedFuel(module, "count", 40, interval)
+        }
+
+        assertTrue(charged.first() > 0, "the workload must burn fuel")
+        assertEquals(1, charged.distinct().size, "fuel charged per interval: $charged")
+    }
+
+    @Test
+    fun budgetedFuelChargesWhatThePerInstructionMeteredLoopCharges(): Unit = runBlocking {
+        val unitCost = InstructionCostTable { 1L }
+
+        val loop = countingLoopModule()
+        assertEquals(
+            consumedFuel(loop, "count", 40, 16_384, unitCost),
+            consumedFuel(loop, "count", 40, 16_384),
+        )
+
+        val recursive = recursiveCountdownModule(tail = false)
+        assertEquals(
+            consumedFuel(recursive, "countdown", 25, 16_384, unitCost),
+            consumedFuel(recursive, "countdown", 25, 16_384),
+        )
+    }
+
+    @Test
+    fun budgetedFuelRunsOutOnTheSameInstructionAtEveryCheckpointInterval(): Unit = runBlocking {
+        val module = countingLoopModule()
+        val exactCost = consumedFuel(module, "count", 40, 16_384)
+
+        CHECKPOINT_INTERVALS.forEach { interval ->
+            val sufficient = fuelledStore(interval, exactCost)
+            assertEquals(
+                listOf(Value.I32(40)),
+                Instance(sufficient, module, ResolvedImports())
+                    .invoke("count", listOf(Value.I32(40))),
+                "interval $interval must finish on exactly $exactCost fuel",
+            )
+            assertEquals(0, sufficient.fuel)
+
+            assertFailsWith<OutOfFuel>("interval $interval must trap one instruction short") {
+                Instance(fuelledStore(interval, exactCost - 1), module, ResolvedImports())
+                    .invoke("count", listOf(Value.I32(40)))
+            }
+        }
+    }
+
+    private fun fuelledStore(
+        checkpointInterval: Int,
+        initialFuel: Long,
+        instructionCosts: InstructionCostTable? = null,
+    ): Store = Store(
+        StoreConfig(
+            checkpointInterval = checkpointInterval,
+            fuelEnabled = true,
+            initialFuel = initialFuel,
+            instructionCosts = instructionCosts,
+        ),
+    )
+
+    private suspend fun consumedFuel(
+        module: Module,
+        export: String,
+        argument: Int,
+        checkpointInterval: Int,
+        instructionCosts: InstructionCostTable? = null,
+    ): Long {
+        val store = fuelledStore(checkpointInterval, FUEL_BUDGET, instructionCosts)
+        Instance(store, module, ResolvedImports())
+            .invoke(export, listOf(Value.I32(argument)))
+        return FUEL_BUDGET - store.fuel
+    }
+
+    /** `while (n != 0) { total++; n-- }` — loop back edges plus straight-line arithmetic. */
+    private fun countingLoopModule(): Module = validatedModule {
+        types += FuncType(listOf(ValType.I32), listOf(ValType.I32))
+        functions += Function(
+            typeIndex = 0,
+            locals = listOf(ValType.I32),
+            body = listOf(
+                Block(
+                    BlockType.Empty,
+                    listOf(
+                        Loop(
+                            BlockType.Empty,
+                            listOf(
+                                FcIndex(0x20, 0),
+                                Simple(0x45),
+                                BrIf(1),
+                                FcIndex(0x20, 1),
+                                I32Const(1),
+                                Simple(0x6A),
+                                FcIndex(0x21, 1),
+                                FcIndex(0x20, 0),
+                                I32Const(1),
+                                Simple(0x6B),
+                                FcIndex(0x21, 0),
+                                Br(0),
+                            ),
+                        ),
+                    ),
+                ),
+                FcIndex(0x20, 1),
+            ),
+        )
+        exports += Export("count", ExportDesc.Function(0))
+    }
+
     private fun recursiveCountdownModule(tail: Boolean): Module = validatedModule {
         types += FuncType(listOf(ValType.I32), listOf(ValType.I32))
         val recurse: Instr =
@@ -714,6 +825,8 @@ class ExecutionTest {
         ModuleBuilder().apply(configure).build(WASM_HEADER).also(ModuleValidator::validate)
 
     private companion object {
+        val CHECKPOINT_INTERVALS = listOf(1, 3, 64, 16_384)
+        const val FUEL_BUDGET: Long = 1_000_000
         val WASM_HEADER: ByteArray =
             byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
     }

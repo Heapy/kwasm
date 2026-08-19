@@ -142,7 +142,7 @@ public class Interpreter : ResumableMachine {
     }
 
     private suspend fun run(store: Store) {
-        if (store.config.fuelEnabled) {
+        if (store.config.fuelEnabled && !store.budgetFuelEnabled) {
             runMetered(store)
         } else if (store.config.checkpointMode == CheckpointMode.CompiledOutEquivalent) {
             runWithoutCheckpoints(store)
@@ -245,12 +245,14 @@ public class Interpreter : ResumableMachine {
                         )
                     }
                 if (result == LinearHotLoopResult.Complete) break
+                val beforeInstruction =
+                    result == LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
                 store.checkpoint(
                     handleFuel = false,
                     listenerAlreadyNotified = true,
+                    pendingInstruction = beforeInstruction,
                 )
-                checkpointCompletedForFirstInstruction =
-                    result == LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
+                checkpointCompletedForFirstInstruction = beforeInstruction
             }
             if (
                 store.frames.lastOrNull() !== frame ||
@@ -272,6 +274,7 @@ public class Interpreter : ResumableMachine {
                 store.checkpoint(
                     handleFuel = false,
                     listenerAlreadyNotified = true,
+                    pendingInstruction = true,
                 )
             }
             control.pc++
@@ -304,6 +307,11 @@ public class Interpreter : ResumableMachine {
         }
     }
 
+    /**
+     * Per-instruction metered loop, selected only when a custom
+     * [io.heapy.kwasm.InstructionCostTable] makes the checkpoint countdown
+     * unable to represent fuel. Budgeted fuel runs on [runUnmetered].
+     */
     private suspend fun runMetered(store: Store) {
         while (store.frames.isNotEmpty()) {
             val frame = store.frames.last()
@@ -665,7 +673,7 @@ public class Interpreter : ResumableMachine {
                 ) {
                     control.pc = pc
                     store.instructionsUntilCheckpoint = instructionsUntilCheckpoint
-                    if (checkpointRequiresSlowCheckpoint(store)) {
+                    if (checkpointRequiresSlowCheckpoint(store, pendingInstruction = true)) {
                         return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
                     }
                     instructionsUntilCheckpoint = store.instructionsUntilCheckpoint
@@ -1019,7 +1027,7 @@ public class Interpreter : ResumableMachine {
                 store.instructionsUntilCheckpoint--
                 if (
                     (opcode == 0x10 || store.instructionsUntilCheckpoint <= 0) &&
-                    checkpointRequiresSlowCheckpoint(store)
+                    checkpointRequiresSlowCheckpoint(store, pendingInstruction = true)
                 ) {
                     return LinearHotLoopResult.RequiresSlowCheckpointBeforeInstruction
                 }
@@ -1507,7 +1515,10 @@ public class Interpreter : ResumableMachine {
         }
 
     @Suppress("NOTHING_TO_INLINE")
-    private inline fun checkpointRequiresSlowCheckpoint(store: Store): Boolean {
+    private inline fun checkpointRequiresSlowCheckpoint(
+        store: Store,
+        pendingInstruction: Boolean,
+    ): Boolean {
         if (store.storeCancellationPending) store.job.ensureActive()
         if (store.invocationCancellationPending) {
             store.invocationJob?.ensureActive()
@@ -1520,8 +1531,16 @@ public class Interpreter : ResumableMachine {
                 frame?.currentInstructionIndex,
             )
         }
+        if (
+            store.budgetFuelEnabled &&
+            store.settleFuelRequiresSlowPath(pendingInstruction)
+        ) return true
         if (store.controller.pausePending) return true
-        store.instructionsUntilCheckpoint = store.config.checkpointInterval
+        if (store.budgetFuelEnabled) {
+            store.takeFuelSlice()
+        } else {
+            store.instructionsUntilCheckpoint = store.config.checkpointInterval
+        }
         return false
     }
 
@@ -2623,7 +2642,7 @@ public class Interpreter : ResumableMachine {
             ControlKind.Loop -> {
                 target.pc = 0
                 if (store.config.checkpointMode == CheckpointMode.Enabled) {
-                    return checkpointRequiresSlowCheckpoint(store)
+                    return checkpointRequiresSlowCheckpoint(store, pendingInstruction = false)
                 }
             }
             ControlKind.Function -> finishFunction(store, frame)

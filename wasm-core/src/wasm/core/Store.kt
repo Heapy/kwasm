@@ -30,7 +30,14 @@ public enum class FuelExhaustionPolicy {
     Suspend,
 }
 
-/** Optional instruction-cost override. The default cost is one for every instruction. */
+/**
+ * Optional instruction-cost override. The default cost is one for every
+ * instruction.
+ *
+ * A cost table cannot be expressed by the checkpoint countdown, so supplying
+ * one selects the per-instruction metered interpreter loop. Leaving it unset
+ * keeps fuel on the checkpoint-budget path.
+ */
 @io.heapy.kwasm.ExperimentalKwasmApi
 public fun interface InstructionCostTable {
     public fun cost(instruction: Instr): Long
@@ -132,6 +139,15 @@ public class StoreController internal constructor(initialFuel: Long) {
     internal var pausePending: Boolean = false
         private set
 
+    /**
+     * Fuel remaining as of the last settlement.
+     *
+     * Under the default cost table the interpreter reserves a slice of fuel per
+     * checkpoint and settles the burn when that slice ends, so this value is
+     * published at checkpoint granularity rather than per instruction. It is
+     * settled whenever execution parks or finishes. [Store.fuel] additionally
+     * subtracts the burn of a slice that is still in flight.
+     */
     public val fuel: StateFlow<Long> = fuelState.asStateFlow()
 
     public fun addFuel(amount: Long) {
@@ -160,6 +176,18 @@ public class StoreController internal constructor(initialFuel: Long) {
     internal fun canPayFuel(cost: Long): Boolean {
         require(cost >= 0) { "instruction fuel cost must not be negative" }
         return fuelState.value >= cost
+    }
+
+    internal fun fuelValue(): Long = fuelState.value
+
+    /** Settles a burn that was metered by the checkpoint countdown. */
+    internal fun consumeFuel(amount: Long) {
+        if (amount <= 0) return
+        while (true) {
+            val current = fuelState.value
+            val next = if (current <= amount) 0L else current - amount
+            if (fuelState.compareAndSet(current, next)) return
+        }
     }
 
     internal suspend fun awaitFuel(minimum: Long) {
@@ -247,7 +275,14 @@ public class Store(
     /** Structured-concurrency scope owned by this store. */
     public val scope: CoroutineScope = CoroutineScope(parentContext + job)
     public val controller: StoreController = StoreController(config.initialFuel)
-    public val fuel: Long get() = controller.fuel.value
+    /** Fuel remaining, including the burn of a slice that is still in flight. */
+    public val fuel: Long
+        get() =
+            if (budgetFuelEnabled) {
+                (controller.fuelValue() - pendingFuelBurn()).coerceAtLeast(0)
+            } else {
+                controller.fuelValue()
+            }
     public val poisoned: Boolean get() = statusState.value == StoreStatus.Poisoned
     public val status: StateFlow<StoreStatus> get() = statusState.asStateFlow()
     public val pendingImport: PendingImport? get() = currentPendingImport
@@ -287,6 +322,29 @@ public class Store(
     private var lastLinearHotBody: List<Instr>? = null
     private var lastLinearHotCode: LinearHotCode = EMPTY_LINEAR_HOT_CODE
     internal var instructionsUntilCheckpoint: Int = config.checkpointInterval
+
+    /**
+     * `SUSP-1` fuel accounting: instead of a second per-instruction counter,
+     * fuel rides the checkpoint countdown. A checkpoint reserves a slice of at
+     * most [StoreConfig.checkpointInterval] instructions, capped by the fuel
+     * that is actually left; the countdown meters that slice at no extra cost,
+     * and the next checkpoint settles what was burned. The cap is what keeps
+     * the accounting exact: the final slice ends on precisely the instruction
+     * that cannot pay.
+     */
+    internal val budgetFuelEnabled: Boolean =
+        config.fuelEnabled && config.instructionCosts == null
+    private var fuelSliceSize: Int = config.checkpointInterval
+    private var unsettledFuelBurn: Long = 0
+
+    /**
+     * True while the countdown has already been decremented for an instruction
+     * that has not executed yet. Such an instruction must stay unpaid: a
+     * snapshot taken here resumes by re-executing it, so charging it now would
+     * bill it twice. The next slice reserves one instruction for it instead.
+     */
+    private var fuelPendingCharge: Boolean = false
+
     internal fun executionContext(callerContext: CoroutineContext): CoroutineContext =
         StoreExecutionInterceptor(
             executionGate,
@@ -573,7 +631,12 @@ public class Store(
         clearGuestFrames()
         valueStack.clear()
         localStack.clear()
-        instructionsUntilCheckpoint = config.checkpointInterval
+        fuelPendingCharge = false
+        if (budgetFuelEnabled) {
+            takeFuelSlice()
+        } else {
+            instructionsUntilCheckpoint = config.checkpointInterval
+        }
         stateRevision++
     }
 
@@ -592,6 +655,7 @@ public class Store(
     }
 
     internal fun finishInvocation() {
+        if (budgetFuelEnabled) flushFuelBurn()
         currentPendingImport = null
         clearGuestFrames()
         valueStack.clear()
@@ -604,6 +668,7 @@ public class Store(
     }
 
     internal fun poison() {
+        if (budgetFuelEnabled) flushFuelBurn()
         statusState.value = StoreStatus.Poisoned
         running = false
         currentPendingImport = null
@@ -625,25 +690,69 @@ public class Store(
         if (!poisoned) statusState.value = StoreStatus.Running
     }
 
+    /** Instructions burned but not yet published to the shared counter. */
+    private fun pendingFuelBurn(): Long =
+        unsettledFuelBurn + (fuelSliceSize - instructionsUntilCheckpoint.coerceAtLeast(0))
+
     /**
-     * Hot path selected once per invocation when fuel is disabled.
+     * Closes the finished slice and reports whether the guest can no longer pay
+     * for the instruction it is about to execute. Repeated calls are
+     * idempotent, so the fast and slow checkpoint paths may both invoke it.
+     */
+    internal fun settleFuelRequiresSlowPath(pendingInstruction: Boolean): Boolean {
+        val remaining = instructionsUntilCheckpoint
+        unsettledFuelBurn += fuelSliceSize - remaining
+        if (pendingInstruction && !fuelPendingCharge) {
+            unsettledFuelBurn--
+            fuelPendingCharge = true
+        }
+        val normalized = remaining.coerceAtLeast(0)
+        instructionsUntilCheckpoint = normalized
+        fuelSliceSize = normalized
+        return controller.fuelValue() - unsettledFuelBurn <= 0
+    }
+
+    /**
+     * Reserves the next slice, never more than the fuel that is left. An
+     * instruction carried in unpaid takes the first unit of the new slice.
+     */
+    internal fun takeFuelSlice() {
+        val available = (controller.fuelValue() - unsettledFuelBurn).coerceAtLeast(0)
+        fuelSliceSize = minOf(config.checkpointInterval.toLong(), available).toInt()
+        instructionsUntilCheckpoint =
+            if (fuelPendingCharge) fuelSliceSize - 1 else fuelSliceSize
+        fuelPendingCharge = false
+    }
+
+    /** Publishes the pending burn so cross-thread readers observe exact fuel. */
+    private fun flushFuelBurn() {
+        settleFuelRequiresSlowPath(pendingInstruction = false)
+        if (unsettledFuelBurn > 0) {
+            controller.consumeFuel(unsettledFuelBurn)
+            unsettledFuelBurn = 0
+        }
+    }
+
+    /**
+     * Hot path selected once per invocation whenever no cost table is set.
      *
      * Keep this to the specified countdown decrement and branch; in
-     * particular it performs no config/fuel load per guest instruction.
+     * particular it performs no config/fuel load per guest instruction. With
+     * fuel enabled the same countdown also meters the reserved slice.
      */
     internal fun beforeUnmeteredInstructionRequiresSlowCheckpoint(
         forceCheckpoint: Boolean = false,
     ): Boolean {
         instructionsUntilCheckpoint--
         if (!forceCheckpoint && instructionsUntilCheckpoint > 0) return false
-        return checkpointRequiresSlowCheckpoint()
+        return checkpointRequiresSlowCheckpoint(pendingInstruction = true)
     }
 
     /**
      * Completes the common no-pause checkpoint path synchronously. Returning
      * true delegates the uncommon suspending pause path to [checkpoint].
      */
-    internal fun checkpointRequiresSlowCheckpoint(): Boolean {
+    internal fun checkpointRequiresSlowCheckpoint(pendingInstruction: Boolean): Boolean {
         if (storeCancellationPending) job.ensureActive()
         if (invocationCancellationPending) invocationJob?.ensureActive()
         config.listener?.let { listener ->
@@ -654,8 +763,13 @@ public class Store(
                 frame?.currentInstructionIndex,
             )
         }
+        if (budgetFuelEnabled && settleFuelRequiresSlowPath(pendingInstruction)) return true
         if (controller.hasPauseRequest()) return true
-        instructionsUntilCheckpoint = config.checkpointInterval
+        if (budgetFuelEnabled) {
+            takeFuelSlice()
+        } else {
+            instructionsUntilCheckpoint = config.checkpointInterval
+        }
         return false
     }
 
@@ -708,6 +822,7 @@ public class Store(
         handleFuel: Boolean,
         requiredFuel: Long = 1L,
         listenerAlreadyNotified: Boolean = false,
+        pendingInstruction: Boolean = false,
     ) {
         job.ensureActive()
         invocationJob?.ensureActive()
@@ -720,20 +835,13 @@ public class Store(
             )
         }
 
-        if (handleFuel) {
-            when (config.fuelExhaustionPolicy) {
-                FuelExhaustionPolicy.Trap -> throw OutOfFuel(
-                    frame?.functionIndex,
-                    frame?.functionName,
-                    guestStack(),
-                )
-                FuelExhaustionPolicy.Suspend -> {
-                    statusState.value = StoreStatus.WaitingForFuel
-                    controller.awaitFuel(requiredFuel)
-                    invocationJob?.ensureActive()
-                    statusState.value = StoreStatus.Running
-                }
+        if (budgetFuelEnabled) {
+            if (settleFuelRequiresSlowPath(pendingInstruction)) {
+                flushFuelBurn()
+                exhaustFuel(frame, 1L)
             }
+        } else if (handleFuel) {
+            exhaustFuel(frame, requiredFuel)
         }
 
         if (controller.hasPauseRequest()) {
@@ -742,7 +850,27 @@ public class Store(
             invocationJob?.ensureActive()
             statusState.value = StoreStatus.Running
         }
-        instructionsUntilCheckpoint = config.checkpointInterval
+        if (budgetFuelEnabled) {
+            takeFuelSlice()
+        } else {
+            instructionsUntilCheckpoint = config.checkpointInterval
+        }
+    }
+
+    private suspend fun exhaustFuel(frame: GuestCallFrame?, requiredFuel: Long) {
+        when (config.fuelExhaustionPolicy) {
+            FuelExhaustionPolicy.Trap -> throw OutOfFuel(
+                frame?.functionIndex,
+                frame?.functionName,
+                guestStack(),
+            )
+            FuelExhaustionPolicy.Suspend -> {
+                statusState.value = StoreStatus.WaitingForFuel
+                controller.awaitFuel(requiredFuel)
+                invocationJob?.ensureActive()
+                statusState.value = StoreStatus.Running
+            }
+        }
     }
 
     internal fun ensureValueStackLimit() {
@@ -1294,7 +1422,15 @@ public class Store(
         currentPendingImport = snapshot.pendingImport?.let {
             PendingImport(it.functionIndex, it.arguments())
         }
-        instructionsUntilCheckpoint = snapshot.instructionsUntilCheckpoint
+        unsettledFuelBurn = 0
+        fuelPendingCharge = false
+        instructionsUntilCheckpoint =
+            if (budgetFuelEnabled) {
+                minOf(snapshot.instructionsUntilCheckpoint.toLong(), snapshot.fuel).toInt()
+            } else {
+                snapshot.instructionsUntilCheckpoint
+            }
+        fuelSliceSize = instructionsUntilCheckpoint
         running = false
         restoredExecution = true
         statusState.value = StoreStatus.Paused
