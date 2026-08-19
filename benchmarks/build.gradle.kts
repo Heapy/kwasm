@@ -54,6 +54,7 @@ benchmark {
                 exclude("ExternalCoreMarkBenchmark")
             }
             exclude("PinnedChasmBenchmark")
+            exclude("I32ExpressionPlanBenchmark")
             advanced("jvmForks", 1)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
@@ -72,6 +73,7 @@ benchmark {
             exclude("Snapshot64MiBBenchmark")
             exclude("ExternalCoreMarkBenchmark")
             exclude("PinnedChasmBenchmark")
+            exclude("I32ExpressionPlanBenchmark")
             advanced("jvmForks", 0)
         }
         register("hotSmoke") {
@@ -98,6 +100,19 @@ benchmark {
             include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
             include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
             include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
+            advanced("jvmForks", 1)
+            advanced("nativeFork", "perBenchmark")
+            advanced("nativeGCAfterIteration", true)
+        }
+        register("i32ExpressionPlan") {
+            warmups = 3
+            iterations = 5
+            iterationTime = 1
+            iterationTimeUnit = "s"
+            outputTimeUnit = "ms"
+            mode = "avgt"
+            reportFormat = "json"
+            include("I32ExpressionPlanBenchmark")
             advanced("jvmForks", 1)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
