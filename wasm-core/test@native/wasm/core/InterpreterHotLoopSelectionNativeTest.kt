@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -17,6 +18,7 @@ class InterpreterHotLoopSelectionNativeTest {
     fun nativeSelectsHoistedLinearHotLoop() {
         assertTrue(USE_HOISTED_LINEAR_HOT_LOOP)
         assertTrue(USE_FLAT_DIRECT_CALL_METADATA)
+        assertFalse(USE_TWO_SLOT_I32_EXPRESSION_PLAN)
     }
 
     @Test

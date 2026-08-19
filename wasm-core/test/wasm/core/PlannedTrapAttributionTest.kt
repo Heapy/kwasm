@@ -18,13 +18,13 @@ class PlannedTrapAttributionTest {
             module = plannedDivisionTrapModule(trapInSecondOperation = false),
             expectedKind = TrapKind.INTEGER_DIVIDE_BY_ZERO,
             expectedPc = 2,
-            expectedPlan = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET,
+            expectedPlan = expectedTwoSlotPlan,
         )
         assertExactTrapPcAcrossModes(
             module = plannedDivisionTrapModule(trapInSecondOperation = true),
             expectedKind = TrapKind.INTEGER_DIVIDE_BY_ZERO,
             expectedPc = 4,
-            expectedPlan = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET,
+            expectedPlan = expectedTwoSlotPlan,
         )
         val memoryModule = plannedNestedLoadTrapModule()
         assertExactTrapPcAcrossModes(
@@ -316,6 +316,13 @@ class PlannedTrapAttributionTest {
     )
 
     private companion object {
+        val expectedTwoSlotPlan: Byte =
+            if (USE_TWO_SLOT_I32_EXPRESSION_PLAN) {
+                LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET
+            } else {
+                (LINEAR_PLAN_I32_EXPRESSION_OFFSET + 6).toByte()
+            }
+
         val WASM_HEADER: ByteArray =
             byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
     }

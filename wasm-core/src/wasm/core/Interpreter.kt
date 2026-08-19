@@ -1266,7 +1266,10 @@ public class Interpreter : ResumableMachine {
         }
         val first = body[pc] as FcIndex
         val second = body[pc + 1]
-        if (plan == LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET.toInt()) {
+        if (
+            USE_TWO_SLOT_I32_EXPRESSION_PLAN &&
+            plan == LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET.toInt()
+        ) {
             var result = executePlannedI32Binary(
                 control = control,
                 instructionIndex = pc + 2,

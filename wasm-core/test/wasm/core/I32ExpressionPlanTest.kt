@@ -13,7 +13,7 @@ class I32ExpressionPlanTest {
         val module = expressionModule()
         val body = module.functions[0].body
         assertEquals(
-            LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET,
+            expectedTwoSlotPlan,
             Store().linearHotCode(body).plan[2],
         )
 
@@ -130,6 +130,13 @@ class I32ExpressionPlanTest {
     )
 
     private companion object {
+        val expectedTwoSlotPlan: Byte =
+            if (USE_TWO_SLOT_I32_EXPRESSION_PLAN) {
+                LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET
+            } else {
+                (LINEAR_PLAN_I32_EXPRESSION_OFFSET + 6).toByte()
+            }
+
         val WASM_HEADER: ByteArray =
             byteArrayOf(0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00)
     }

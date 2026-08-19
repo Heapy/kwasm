@@ -807,7 +807,10 @@ public class Store(
             if (first.opcode.isLinearHotDispatchOpcode()) linearHotInstructionCount++
             val second = body.getOrNull(index + 1)
             val third = body.getOrNull(index + 2)
-            if (body.hasPlannedTwoSlotI32ExpressionFrom(index)) {
+            if (
+                USE_TWO_SLOT_I32_EXPRESSION_PLAN &&
+                body.hasPlannedTwoSlotI32ExpressionFrom(index)
+            ) {
                 plan[index] = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET
                 continue
             }
