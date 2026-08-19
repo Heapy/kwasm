@@ -46,7 +46,9 @@ class InterpreterHotLoopSelectionNativeTest {
         val importedType = FuncType(emptyList(), emptyList())
         val localType = FuncType(listOf(ValType.I32), listOf(ValType.I32))
         val calls = mutableListOf<Pair<Int, List<Value>>>()
-        val store = Store(
+        lateinit var store: Store
+        var observedInPlaceDirectFrame = false
+        store = Store(
             StoreConfig(
                 listener = object : ExecutionListener {
                     override fun onCallStarted(
@@ -55,6 +57,20 @@ class InterpreterHotLoopSelectionNativeTest {
                         arguments: List<Value>,
                     ) {
                         calls += functionIndex to arguments
+                        if (functionIndex == 2) {
+                            val frame = store.frames.last()
+                            assertEquals(0, store.localStack.size)
+                            assertEquals(
+                                store.frames.sumOf(GuestCallFrame::localCount),
+                                store.valueStackLocalSlots,
+                            )
+                            assertEquals(Value.I32(41), store.valueStack[frame.localsBase])
+                            assertEquals(
+                                frame.localsBase + frame.localCount,
+                                frame.controls.first().stackBase,
+                            )
+                            observedInPlaceDirectFrame = true
+                        }
                     }
                 },
             ),
@@ -82,6 +98,7 @@ class InterpreterHotLoopSelectionNativeTest {
             ),
             calls,
         )
+        assertTrue(observedInPlaceDirectFrame)
     }
 
     private fun directCallModule(importedType: FuncType, localType: FuncType): Module =

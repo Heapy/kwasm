@@ -2529,17 +2529,33 @@ public class Interpreter : ResumableMachine {
         val type = directCalls.types[localIndex]
         val parameterCount = directCalls.parameterCounts[localIndex]
         val inheritedBase = store.valueStack.size - parameterCount
-        val localsBase = store.localStack.size
-        store.valueStack.moveTopTo(store.localStack, parameterCount)
-        function.locals.forEach {
-            store.localStack.addLast(zeroOf(it, instance.module))
-        }
         val listener = store.config.listener
+        val locals: RuntimeValueStack
+        val localsBase: Int
+        val listenerArguments: List<Value>?
+        if (USE_IN_PLACE_GUEST_PARAMETERS) {
+            locals = store.valueStack
+            localsBase = inheritedBase
+            listenerArguments = listener?.let {
+                store.valueStack.toList(localsBase, parameterCount)
+            }
+        } else {
+            locals = store.localStack
+            localsBase = store.localStack.size
+            store.valueStack.moveTopTo(store.localStack, parameterCount)
+            listenerArguments = listener?.let {
+                store.localStack.toList(localsBase, parameterCount)
+            }
+        }
+        function.locals.forEach {
+            locals.addLast(zeroOf(it, instance.module))
+        }
         val root = store.acquireGuestControl(
             kind = ControlKind.Function,
             body = function.body,
             pc = 0,
-            stackBase = inheritedBase,
+            stackBase =
+                if (USE_IN_PLACE_GUEST_PARAMETERS) store.valueStack.size else inheritedBase,
             parameterCount = 0,
             resultCount = type.results.size,
             labelArity = type.results.size,
@@ -2554,12 +2570,12 @@ public class Interpreter : ResumableMachine {
             stackBase = inheritedBase,
             root = root,
         )
-        store.frames.addLast(frame)
-        if (listener != null) {
-            listener.onCallStarted(
+        store.addGuestFrame(frame)
+        if (listenerArguments != null) {
+            listener?.onCallStarted(
                 instance,
                 functionIndex,
-                store.localStack.toList(localsBase, parameterCount),
+                listenerArguments,
             )
         }
     }
