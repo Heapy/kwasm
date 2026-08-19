@@ -3,9 +3,9 @@ package io.heapy.kwasm
 import kotlin.test.Test
 import kotlin.test.assertFalse
 
-class InterpreterHotLoopSelectionJvmTest {
+class InterpreterPlatformSelectionManagedTest {
     @Test
-    fun jvmSelectsOriginalLinearHotLoop() {
+    fun managedTargetsKeepOriginalInterpreterPaths() {
         assertFalse(USE_HOISTED_LINEAR_HOT_LOOP)
         assertFalse(USE_FLAT_DIRECT_CALL_METADATA)
     }
