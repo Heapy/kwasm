@@ -273,6 +273,10 @@ public class Store(
 
     internal val valueStack: RuntimeValueStack = RuntimeValueStack()
     internal val localStack: RuntimeValueStack = RuntimeValueStack()
+    internal var valueStackLocalSlots: Int = 0
+        private set
+    internal val operandStackSize: Int
+        get() = valueStack.size - valueStackLocalSlots
     internal val i32ExpressionScratch: IntArray =
         IntArray(MAX_LINEAR_I32_EXPRESSION_DEPTH)
     internal val frames: ArrayDeque<GuestCallFrame> = ArrayDeque()
@@ -746,10 +750,11 @@ public class Store(
     }
 
     internal fun ensureValueStackLimit() {
-        if (valueStack.size > config.limits.maxValueStackSlots) {
+        val operandSlots = operandStackSize
+        if (operandSlots > config.limits.maxValueStackSlots) {
             throw ExecutionTrap(
                 TrapKind.STACK_EXHAUSTED,
-                "value stack has ${valueStack.size} slots; maximum is ${config.limits.maxValueStackSlots}",
+                "value stack has $operandSlots slots; maximum is ${config.limits.maxValueStackSlots}",
             )
         }
     }
@@ -965,9 +970,20 @@ public class Store(
         return frame
     }
 
+    internal fun addGuestFrame(frame: GuestCallFrame) {
+        frames.addLast(frame)
+        if (USE_IN_PLACE_GUEST_PARAMETERS) {
+            valueStackLocalSlots += frame.localCount
+        }
+    }
+
     internal fun removeLastGuestFrame(): GuestCallFrame {
         val frame = frames.removeLast()
-        localStack.truncate(frame.localsBase)
+        if (USE_IN_PLACE_GUEST_PARAMETERS) {
+            valueStackLocalSlots -= frame.localCount
+        } else {
+            localStack.truncate(frame.localsBase)
+        }
         while (frame.controls.isNotEmpty()) {
             releaseGuestControl(frame.controls.removeLast())
         }
@@ -1097,16 +1113,45 @@ public class Store(
             )
         }
 
+        val snapshotValues =
+            if (USE_IN_PLACE_GUEST_PARAMETERS) {
+                buildList(operandStackSize) {
+                    var physicalIndex = 0
+                    frames.forEach { frame ->
+                        while (physicalIndex < frame.localsBase) {
+                            add(valueStack[physicalIndex++])
+                        }
+                        physicalIndex += frame.localCount
+                    }
+                    while (physicalIndex < valueStack.size) {
+                        add(valueStack[physicalIndex++])
+                    }
+                }
+            } else {
+                valueStack.toList()
+            }
+        var localsBefore = 0
         val frameSnapshots = frames.map { frame ->
             val function = instance.module.functions.getOrNull(
                 frame.functionIndex - instance.imports.functions.size,
             ) ?: throw SnapshotStateException(
                 "frame function ${frame.functionIndex} is not a local function in the snapshotted instance",
             )
-            RuntimeFrameSnapshot(
+            val locals =
+                if (USE_IN_PLACE_GUEST_PARAMETERS) {
+                    valueStack.toList(frame.localsBase, frame.localCount)
+                } else {
+                    localStack.toList(frame.localsBase, frame.localCount)
+                }
+            val snapshot = RuntimeFrameSnapshot(
                 functionIndex = frame.functionIndex,
-                locals = localStack.toList(frame.localsBase, frame.localCount),
-                stackBase = frame.stackBase,
+                locals = locals,
+                stackBase =
+                    if (USE_IN_PLACE_GUEST_PARAMETERS) {
+                        frame.stackBase - localsBefore
+                    } else {
+                        frame.stackBase
+                    },
                 controls = frame.controls.map { control ->
                     RuntimeControlSnapshot(
                         kind = control.kind.toRuntimeKind(),
@@ -1115,7 +1160,12 @@ public class Store(
                                 "cannot locate control body in function ${frame.functionIndex}",
                             ),
                         pc = control.pc,
-                        stackBase = control.stackBase,
+                        stackBase =
+                            if (USE_IN_PLACE_GUEST_PARAMETERS) {
+                                control.stackBase - localsBefore - frame.localCount
+                            } else {
+                                control.stackBase
+                            },
                         parameterCount = control.parameterCount,
                         resultCount = control.resultCount,
                         labelArity = control.labelArity,
@@ -1123,13 +1173,15 @@ public class Store(
                     )
                 },
             )
+            localsBefore += frame.localCount
+            snapshot
         }
         val pending = currentPendingImport?.let {
             RuntimePendingImportSnapshot(it.functionIndex, it.arguments)
         }
         return RuntimeStoreSnapshot(
             instance = instance.captureRuntimeSnapshot(),
-            valueStack = valueStack.toList(),
+            valueStack = snapshotValues,
             frames = frameSnapshots,
             pendingImport = pending,
             fuel = fuel,
@@ -1237,52 +1289,110 @@ public class Store(
         controller.restoreFuel(snapshot.fuel)
         clearGuestFrames()
         valueStack.clear()
-        snapshot.valueStack().forEach(valueStack::addLast)
         localStack.clear()
-        snapshot.frames.forEach { frameSnapshot ->
-            val type = instance.functionType(frameSnapshot.functionIndex)
-            val function = instance.module.functions[
-                frameSnapshot.functionIndex - instance.imports.functions.size
-            ]
-            val controls = ArrayDeque<GuestControlFrame>()
-            frameSnapshot.controls.forEach { control ->
-                val body = resolveRuntimeBody(function.body, control.bodyPath)
-                controls.addLast(
-                    GuestControlFrame(
-                        kind = control.kind.toControlKind(),
-                        body = body,
-                        pc = control.pc,
-                        stackBase = control.stackBase,
-                        parameterCount = control.parameterCount,
-                        resultCount = control.resultCount,
-                        labelArity = control.labelArity,
-                        exceptionHandler = resolveRuntimeExceptionHandler(
-                            function.body,
-                            control.kind,
-                            control.bodyPath,
+        val snapshotValues = snapshot.valueStack()
+        if (USE_IN_PLACE_GUEST_PARAMETERS) {
+            var logicalValueIndex = 0
+            snapshot.frames.forEach { frameSnapshot ->
+                while (logicalValueIndex < frameSnapshot.stackBase) {
+                    valueStack.addLast(snapshotValues[logicalValueIndex++])
+                }
+                val type = instance.functionType(frameSnapshot.functionIndex)
+                val function = instance.module.functions[
+                    frameSnapshot.functionIndex - instance.imports.functions.size
+                ]
+                val physicalStackBase = valueStack.size
+                val locals = frameSnapshot.locals()
+                val localsBase = valueStack.size
+                locals.forEach(valueStack::addLast)
+                val localSlotsThroughFrame = valueStackLocalSlots + locals.size
+                val controls = ArrayDeque<GuestControlFrame>()
+                frameSnapshot.controls.forEach { control ->
+                    val body = resolveRuntimeBody(function.body, control.bodyPath)
+                    controls.addLast(
+                        GuestControlFrame(
+                            kind = control.kind.toControlKind(),
+                            body = body,
+                            pc = control.pc,
+                            stackBase = control.stackBase + localSlotsThroughFrame,
+                            parameterCount = control.parameterCount,
+                            resultCount = control.resultCount,
+                            labelArity = control.labelArity,
+                            exceptionHandler = resolveRuntimeExceptionHandler(
+                                function.body,
+                                control.kind,
+                                control.bodyPath,
+                            ),
+                            caughtException = control.caughtException,
+                            linearHotCode = linearHotCode(body),
                         ),
-                        caughtException = control.caughtException,
-                        linearHotCode = linearHotCode(body),
+                    )
+                }
+                addGuestFrame(
+                    GuestCallFrame(
+                        instance = instance,
+                        functionIndex = frameSnapshot.functionIndex,
+                        functionName = instance.module.nameSection
+                            ?.functionNames
+                            ?.get(frameSnapshot.functionIndex),
+                        type = type,
+                        localsBase = localsBase,
+                        localCount = locals.size,
+                        stackBase = physicalStackBase,
+                        controls = controls,
                     ),
                 )
             }
-            val locals = frameSnapshot.locals()
-            val localsBase = localStack.size
-            locals.forEach(localStack::addLast)
-            frames.addLast(
-                GuestCallFrame(
-                    instance = instance,
-                    functionIndex = frameSnapshot.functionIndex,
-                    functionName = instance.module.nameSection
-                        ?.functionNames
-                        ?.get(frameSnapshot.functionIndex),
-                    type = type,
-                    localsBase = localsBase,
-                    localCount = locals.size,
-                    stackBase = frameSnapshot.stackBase,
-                    controls = controls,
-                ),
-            )
+            while (logicalValueIndex < snapshotValues.size) {
+                valueStack.addLast(snapshotValues[logicalValueIndex++])
+            }
+        } else {
+            snapshotValues.forEach(valueStack::addLast)
+            snapshot.frames.forEach { frameSnapshot ->
+                val type = instance.functionType(frameSnapshot.functionIndex)
+                val function = instance.module.functions[
+                    frameSnapshot.functionIndex - instance.imports.functions.size
+                ]
+                val controls = ArrayDeque<GuestControlFrame>()
+                frameSnapshot.controls.forEach { control ->
+                    val body = resolveRuntimeBody(function.body, control.bodyPath)
+                    controls.addLast(
+                        GuestControlFrame(
+                            kind = control.kind.toControlKind(),
+                            body = body,
+                            pc = control.pc,
+                            stackBase = control.stackBase,
+                            parameterCount = control.parameterCount,
+                            resultCount = control.resultCount,
+                            labelArity = control.labelArity,
+                            exceptionHandler = resolveRuntimeExceptionHandler(
+                                function.body,
+                                control.kind,
+                                control.bodyPath,
+                            ),
+                            caughtException = control.caughtException,
+                            linearHotCode = linearHotCode(body),
+                        ),
+                    )
+                }
+                val locals = frameSnapshot.locals()
+                val localsBase = localStack.size
+                locals.forEach(localStack::addLast)
+                addGuestFrame(
+                    GuestCallFrame(
+                        instance = instance,
+                        functionIndex = frameSnapshot.functionIndex,
+                        functionName = instance.module.nameSection
+                            ?.functionNames
+                            ?.get(frameSnapshot.functionIndex),
+                        type = type,
+                        localsBase = localsBase,
+                        localCount = locals.size,
+                        stackBase = frameSnapshot.stackBase,
+                        controls = controls,
+                    ),
+                )
+            }
         }
         currentPendingImport = snapshot.pendingImport?.let {
             PendingImport(it.functionIndex, it.arguments())
@@ -1321,6 +1431,7 @@ public class Store(
                 "frame stack has ${snapshot.frames.size} frames; limit is ${config.limits.maxFrames}",
             )
         }
+        var previousFrameStackBase = 0
         snapshot.frames.forEachIndexed { frameIndex, frame ->
             val localFunctionIndex = frame.functionIndex - instance.imports.functions.size
             val function = instance.module.functions.getOrNull(localFunctionIndex)
@@ -1349,6 +1460,13 @@ public class Store(
                     "frame $frameIndex stack base ${frame.stackBase} is outside 0..${values.size}",
                 )
             }
+            if (frameIndex > 0 && frame.stackBase < previousFrameStackBase) {
+                throw SnapshotStateException(
+                    "frame $frameIndex stack base ${frame.stackBase} precedes " +
+                        "parent frame base $previousFrameStackBase",
+                )
+            }
+            previousFrameStackBase = frame.stackBase
             if (frame.controls.isEmpty()) {
                 throw SnapshotStateException("frame $frameIndex has no control frames")
             }
@@ -1367,6 +1485,12 @@ public class Store(
                     throw SnapshotStateException(
                         "frame $frameIndex control $controlIndex stack base ${control.stackBase} " +
                             "is outside 0..${values.size}",
+                    )
+                }
+                if (control.stackBase < frame.stackBase) {
+                    throw SnapshotStateException(
+                        "frame $frameIndex control $controlIndex stack base ${control.stackBase} " +
+                            "precedes frame base ${frame.stackBase}",
                     )
                 }
                 if (
