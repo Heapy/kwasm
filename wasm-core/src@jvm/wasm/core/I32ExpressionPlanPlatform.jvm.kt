@@ -74,4 +74,3 @@ private fun managedI32ProducerValue(
     is Instr.FcIndex -> locals.getI32(localsBase + instruction.index)
     else -> error("opcode 0x${instruction.opcode.toString(16)} is not an i32 producer")
 }
-
