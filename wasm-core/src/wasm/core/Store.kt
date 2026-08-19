@@ -807,6 +807,10 @@ public class Store(
             if (first.opcode.isLinearHotDispatchOpcode()) linearHotInstructionCount++
             val second = body.getOrNull(index + 1)
             val third = body.getOrNull(index + 2)
+            if (body.hasPlannedTwoSlotI32ExpressionFrom(index)) {
+                plan[index] = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET
+                continue
+            }
             val expressionLength = body.i32ExpressionLengthFrom(index)
             if (expressionLength >= MIN_LINEAR_I32_EXPRESSION_LENGTH) {
                 plan[index] = (LINEAR_PLAN_I32_EXPRESSION_OFFSET + expressionLength).toByte()
@@ -1647,6 +1651,7 @@ internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_SET: Byte = -11
 internal const val LINEAR_PLAN_LOCAL_I32_LOAD_LOAD_TEE: Byte = -12
 internal const val LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF: Byte = -13
 internal const val LINEAR_PLAN_PRODUCERS_BINARY_SET_BR: Byte = -14
+internal const val LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET: Byte = -15
 internal const val LINEAR_PLAN_CONST_BINARY: Byte = 2
 internal const val LINEAR_PLAN_PRODUCERS_BINARY: Byte = 3
 internal const val LINEAR_PLAN_PRODUCERS_BINARY_BINARY: Byte = 4
@@ -1686,6 +1691,17 @@ private fun Int.isPlannedI32Comparison(): Boolean = this in 0x46..0x4F
 
 private fun Int.isPlannedI32Load(): Boolean =
     this == 0x28 || this in 0x2C..0x2F
+
+private fun Instr.isPlannedI32Producer(): Boolean =
+    this is Instr.I32Const || this is Instr.FcIndex && opcode == 0x20
+
+private fun List<Instr>.hasPlannedTwoSlotI32ExpressionFrom(start: Int): Boolean =
+    (getOrNull(start) as? Instr.FcIndex)?.opcode == 0x20 &&
+        getOrNull(start + 1)?.isPlannedI32Producer() == true &&
+        (getOrNull(start + 2) as? Instr.Simple)?.opcode?.isPlannedI32Binary() == true &&
+        getOrNull(start + 3)?.isPlannedI32Producer() == true &&
+        (getOrNull(start + 4) as? Instr.Simple)?.opcode?.isPlannedI32Binary() == true &&
+        (getOrNull(start + 5) as? Instr.FcIndex)?.opcode == 0x21
 
 private fun List<Instr>.i32ExpressionLengthFrom(start: Int): Int {
     var depth = 0

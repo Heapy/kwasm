@@ -18,13 +18,13 @@ class PlannedTrapAttributionTest {
             module = plannedDivisionTrapModule(trapInSecondOperation = false),
             expectedKind = TrapKind.INTEGER_DIVIDE_BY_ZERO,
             expectedPc = 2,
-            expectedPlan = (LINEAR_PLAN_I32_EXPRESSION_OFFSET + 6).toByte(),
+            expectedPlan = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET,
         )
         assertExactTrapPcAcrossModes(
             module = plannedDivisionTrapModule(trapInSecondOperation = true),
             expectedKind = TrapKind.INTEGER_DIVIDE_BY_ZERO,
             expectedPc = 4,
-            expectedPlan = (LINEAR_PLAN_I32_EXPRESSION_OFFSET + 6).toByte(),
+            expectedPlan = LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET,
         )
         val memoryModule = plannedNestedLoadTrapModule()
         assertExactTrapPcAcrossModes(
@@ -261,7 +261,7 @@ class PlannedTrapAttributionTest {
                 listOf(ValType.I32),
                 if (trapInSecondOperation) {
                     listOf(
-                        I32Const(6),
+                        FcIndex(0x20, 0),
                         I32Const(2),
                         Simple(0x6D),
                         I32Const(0),
@@ -270,7 +270,7 @@ class PlannedTrapAttributionTest {
                     )
                 } else {
                     listOf(
-                        I32Const(1),
+                        FcIndex(0x20, 0),
                         I32Const(0),
                         Simple(0x6D),
                         I32Const(1),

@@ -1266,6 +1266,25 @@ public class Interpreter : ResumableMachine {
         }
         val first = body[pc] as FcIndex
         val second = body[pc + 1]
+        if (plan == LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET.toInt()) {
+            var result = executePlannedI32Binary(
+                control = control,
+                instructionIndex = pc + 2,
+                opcode = (body[pc + 2] as Simple).opcode,
+                left = locals.getI32(localsBase + first.index),
+                right = plannedI32ProducerValue(second, locals, localsBase),
+            )
+            result = executePlannedI32Binary(
+                control = control,
+                instructionIndex = pc + 4,
+                opcode = (body[pc + 4] as Simple).opcode,
+                left = result,
+                right = plannedI32ProducerValue(body[pc + 3], locals, localsBase),
+            )
+            val target = body[pc + 5] as FcIndex
+            locals.setI32(localsBase + target.index, result)
+            return true
+        }
         if (
             plan == LINEAR_PLAN_LOCAL_BINARY.toInt() ||
             plan == LINEAR_PLAN_LOCAL_BINARY_SET.toInt()
@@ -1408,6 +1427,16 @@ public class Interpreter : ResumableMachine {
         return true
     }
 
+    private fun plannedI32ProducerValue(
+        instruction: Instr,
+        locals: RuntimeValueStack,
+        localsBase: Int,
+    ): Int = when (instruction) {
+        is I32Const -> instruction.value
+        is FcIndex -> locals.getI32(localsBase + instruction.index)
+        else -> error("opcode 0x${instruction.opcode.toString(16)} is not an i32 producer")
+    }
+
     @Suppress("NOTHING_TO_INLINE")
     private inline fun executePlannedI32Binary(
         control: GuestControlFrame,
@@ -1464,6 +1493,7 @@ public class Interpreter : ResumableMachine {
         LINEAR_PLAN_PRODUCERS_BINARY_SET_BR.toInt(),
         -> 5
         LINEAR_PLAN_PRODUCERS_BINARY_BINARY_BINARY_SET.toInt() -> 6
+        LINEAR_PLAN_TWO_SLOT_I32_EXPRESSION_SET.toInt() -> 6
         LINEAR_PLAN_PRODUCERS_BINARY.toInt() -> 3
         else ->
             if (plan > LINEAR_PLAN_I32_EXPRESSION_OFFSET) {
