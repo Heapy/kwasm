@@ -41,9 +41,11 @@ kotlin {
         }
         androidMain {
             kotlin.srcDir("src@android")
+            kotlin.srcDir("src@jvmAndAndroid")
         }
         jvmMain {
             kotlin.srcDir("src@jvm")
+            kotlin.srcDir("src@jvmAndAndroid")
         }
         listOf(
             "iosArm64Main",
