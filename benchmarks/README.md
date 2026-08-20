@@ -34,6 +34,28 @@ checkpoint decrement and suppresses call-entry/loop-back-edge checkpoints.
 It is unsafe for production because cancellation, pausing, snapshots, and
 fuel depend on checkpoints.
 
+## Measurement methodology
+
+Every measured profile runs 5 forks. One fork is not enough to gate on: the JIT
+can settle into either of two stable states per JVM, so a single fork samples a
+mode rather than the distribution. Measured across byte-identical jars on an
+Apple-silicon laptop, the run-to-run spread was 7.1% on the SHA workload and
+5.7% on JSON — wider than the 5% `SUSP-5` budget and comparable to the 10%
+self-history threshold. At one fork neither gate could resolve its own limit.
+Smoke profiles stay at fork 0 because they assert wiring, not timing.
+
+The gate therefore records what the measurement can actually support. Each
+`SUSP-5` pair and each self-history comparison carries the half-width of its
+confidence interval, and a `resolvable` flag saying whether the distance to the
+limit exceeds that interval. Thresholds are unchanged — an unresolvable row
+still counts — but a green gate whose rows are all unresolvable now says so in
+`resolutionNote` instead of reading as evidence.
+
+When comparing two builds by hand, measure both in one session and alternate
+the order. Cross-session comparisons on a developer machine drift by more than
+the effects worth chasing, and a result that flips sign when the order is
+reversed is noise.
+
 ## Running and gating
 
 Run the JVM suite and produce normalized, machine-readable evidence:

@@ -13,6 +13,18 @@ val hasCoreMarkAsset =
         .orElse(false)
 val coreMarkFixedIterations = 100
 
+/**
+ * Forks per measured benchmark.
+ *
+ * One fork is not enough to gate on: on some machines the JIT settles into one
+ * of two stable states per JVM, so a single fork samples a mode rather than the
+ * distribution. Measured spread across byte-identical jars was 7.1% on the SHA
+ * workload and 5.7% on JSON — wider than the 5% `SUSP-5` budget and comparable
+ * to the 10% self-history threshold, which made both unresolvable. Smoke
+ * profiles keep fork 0 because they assert wiring, not timing.
+ */
+val measurementForks = 5
+
 kotlin {
     jvmToolchain(17)
     compilerOptions {
@@ -57,7 +69,7 @@ benchmark {
             }
             exclude("PinnedChasmBenchmark")
             exclude("I32ExpressionPlanBenchmark")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }
@@ -102,7 +114,7 @@ benchmark {
             include("GuestWorkloadsBenchmark.fib35CheckpointEnabled")
             include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
             include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }
@@ -115,7 +127,7 @@ benchmark {
             mode = "avgt"
             reportFormat = "json"
             include("I32ExpressionPlanBenchmark")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }
@@ -142,7 +154,7 @@ benchmark {
             mode = "avgt"
             reportFormat = "json"
             include("ExternalCoreMarkBenchmark")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
         }
         register("externalComparison") {
@@ -158,7 +170,7 @@ benchmark {
             include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
             include("ExternalCoreMarkBenchmark")
             include("PinnedChasmBenchmark")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }
@@ -174,7 +186,7 @@ benchmark {
             include("GuestWorkloadsBenchmark.sha256LoopCheckpointEnabled")
             include("GuestWorkloadsBenchmark.jsonParseCheckpointEnabled")
             include("ExternalCoreMarkBenchmark")
-            advanced("jvmForks", 1)
+            advanced("jvmForks", measurementForks)
             advanced("nativeFork", "perBenchmark")
             advanced("nativeGCAfterIteration", true)
         }

@@ -218,6 +218,33 @@ def _scores(report: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def _relative_errors(report: dict[str, Any]) -> dict[str, float]:
+    """Half-width of each measurement's confidence interval, as a fraction."""
+    relative = {}
+    for measurement in report["measurements"]:
+        score = float(measurement["scoreMsPerOp"])
+        error = float(measurement.get("scoreErrorMsPerOp") or 0.0)
+        relative[measurement["name"]] = error / score if score > 0 else 0.0
+    return relative
+
+
+def _combined_relative_error(*relative: float) -> float:
+    """Uncertainty of a ratio of independent measurements."""
+    return math.sqrt(sum(value * value for value in relative))
+
+
+def _resolvable(margin: float, uncertainty: float) -> bool:
+    """
+    Whether a verdict is supported by the measurement that produced it.
+
+    A margin smaller than the combined confidence interval means the run cannot
+    tell the two sides apart; the verdict is then an artefact of where the run
+    landed, not evidence. Reported rather than acted upon: the gate keeps its
+    thresholds, but an unresolvable row says so instead of reading as proof.
+    """
+    return abs(margin) > uncertainty
+
+
 def extract_external_comparisons(
     report: dict[str, Any],
     measurement_command: str,
@@ -294,14 +321,24 @@ def _find_suffix(scores: dict[str, float], suffix: str) -> tuple[str, float]:
     return matches[0]
 
 
-def _checkpoint_gate(scores: dict[str, float], enforced: bool) -> dict[str, Any]:
+def _checkpoint_gate(
+    scores: dict[str, float],
+    relative_errors: dict[str, float],
+    enforced: bool,
+) -> dict[str, Any]:
     rows = []
     ratios = []
+    uncertainties = []
     for workload, enabled_suffix, compiled_out_suffix in CHECKPOINT_PAIRS:
         enabled_name, enabled = _find_suffix(scores, enabled_suffix)
         compiled_name, compiled_out = _find_suffix(scores, compiled_out_suffix)
         ratio = enabled / compiled_out
         ratios.append(ratio)
+        uncertainty = _combined_relative_error(
+            relative_errors.get(enabled_name, 0.0),
+            relative_errors.get(compiled_name, 0.0),
+        )
+        uncertainties.append(uncertainty)
         rows.append(
             {
                 "workload": workload,
@@ -311,9 +348,15 @@ def _checkpoint_gate(scores: dict[str, float], enforced: bool) -> dict[str, Any]
                 "compiledOutEquivalentMsPerOp": compiled_out,
                 "ratio": ratio,
                 "overheadPercent": (ratio - 1.0) * 100.0,
+                "relativeUncertaintyPercent": uncertainty * 100.0,
+                "resolvable": _resolvable(ratio - CHECKPOINT_LIMIT, uncertainty),
             },
         )
     geomean = math.exp(sum(math.log(ratio) for ratio in ratios) / len(ratios))
+    geomean_uncertainty = (
+        _combined_relative_error(*uncertainties) / len(uncertainties)
+    )
+    resolvable = _resolvable(geomean - CHECKPOINT_LIMIT, geomean_uncertainty)
     passed = geomean <= CHECKPOINT_LIMIT
     return {
         "requirement": "SUSP-5",
@@ -329,6 +372,14 @@ def _checkpoint_gate(scores: dict[str, float], enforced: bool) -> dict[str, Any]
         "limitMet": passed,
         "geomeanRatio": geomean,
         "geomeanOverheadPercent": (geomean - 1.0) * 100.0,
+        "geomeanRelativeUncertaintyPercent": geomean_uncertainty * 100.0,
+        "resolvable": resolvable,
+        "resolutionNote": (
+            None
+            if resolvable
+            else "the distance to the limit is inside the measurement's "
+            "confidence interval; raise fork count before trusting this verdict"
+        ),
         "pairs": rows,
     }
 
@@ -402,21 +453,33 @@ def _history_gate(
         )
     current_scores = _scores(current)
     baseline_scores = _scores(baseline)
+    current_errors = _relative_errors(current)
+    baseline_errors = _relative_errors(baseline)
     missing = sorted(set(current_scores) - set(baseline_scores))
     comparisons = []
     failed = False
+    unresolvable = []
     for name in sorted(set(current_scores) & set(baseline_scores)):
         current_score = current_scores[name]
         baseline_score = baseline_scores[name]
         regression = (current_score / baseline_score - 1.0) * 100.0
+        uncertainty = _combined_relative_error(
+            current_errors.get(name, 0.0),
+            baseline_errors.get(name, 0.0),
+        ) * 100.0
+        resolvable = _resolvable(regression - max_regression_percent, uncertainty)
         if regression > max_regression_percent:
             failed = True
+            if not resolvable:
+                unresolvable.append(name)
         comparisons.append(
             {
                 "benchmark": name,
                 "baselineMsPerOp": baseline_score,
                 "currentMsPerOp": current_score,
                 "regressionPercent": regression,
+                "uncertaintyPercent": uncertainty,
+                "resolvable": resolvable,
             },
         )
     if not comparisons:
@@ -435,6 +498,13 @@ def _history_gate(
         "enforced": True,
         "maxRegressionPercent": max_regression_percent,
         "newBenchmarks": missing,
+        "unresolvableRegressions": unresolvable,
+        "resolutionNote": (
+            None
+            if not unresolvable
+            else "these regressions are inside the combined confidence "
+            "interval; re-measure with more forks before treating them as real"
+        ),
         "comparisons": comparisons,
     }
 
@@ -601,11 +671,12 @@ def verify_report(
     if not math.isfinite(max_regression_percent) or max_regression_percent < 0:
         raise GateInputError("max regression percent must be finite and non-negative")
     scores = _scores(current)
+    relative_errors = _relative_errors(current)
     for suffix in REQUIRED_SUFFIXES:
         _find_suffix(scores, suffix)
 
     gates = [
-        _checkpoint_gate(scores, enforce_checkpoint_overhead),
+        _checkpoint_gate(scores, relative_errors, enforce_checkpoint_overhead),
         _startup_gate(scores, str(current.get("target"))),
         _snapshot_gate(scores, enforce_snapshot_target),
         _history_gate(current, baseline, max_regression_percent),
