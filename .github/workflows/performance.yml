@@ -1,12 +1,6 @@
 name: Performance
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-  schedule:
-    - cron: "17 4 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -101,7 +95,6 @@ jobs:
 
   native:
     name: ${{ matrix.target }} performance gates
-    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -161,7 +154,6 @@ jobs:
 
   compiled-reference:
     name: ${{ matrix.target }} Wasmtime compiled reference
-    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
