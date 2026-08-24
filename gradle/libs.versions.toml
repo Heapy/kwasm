@@ -1,5 +1,5 @@
 [versions]
-agp = "9.4.0-alpha08"
+agp = "9.5.0-alpha01"
 benchmark = "0.4.17"
 chasm = "1.6.1"
 coroutines = "1.11.0"
