@@ -1,6 +1,6 @@
 [versions]
 agp = "9.5.0-alpha01"
-benchmark = "0.4.17"
+benchmark = "0.4.19"
 chasm = "1.6.1"
 coroutines = "1.11.0"
 kotlin = "2.4.10"
