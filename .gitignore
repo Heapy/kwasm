@@ -54,3 +54,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Third-party runtime checkouts used for comparison research
+projects/
