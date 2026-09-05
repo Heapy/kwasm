@@ -66,6 +66,24 @@ class InterpreterHotPathInvariantTest {
     }
 
     @Test
+    fun frozenBodyPlanCacheSurvivesAlternationAndAnotherStore() {
+        val first = moduleReturning(listOf(I32Const(1))).functions.single().body
+        val second = moduleReturning(listOf(I32Const(2))).functions.single().body
+        assertTrue(first is FrozenInstructions)
+
+        val store = Store()
+        val firstCode = store.linearHotCode(first)
+        val secondCode = store.linearHotCode(second)
+
+        assertSame(firstCode, store.linearHotCode(first))
+        assertSame(secondCode, store.linearHotCode(second))
+
+        val other = Store()
+        assertTrue(other.linearHotCode(first) !== firstCode)
+        assertSame(firstCode, store.linearHotCode(first))
+    }
+
+    @Test
     fun packedInstructionBudgetRejectsOverflowWithoutOvercommitting() {
         val budget = PackedLinearCodeBudget(maxInstructions = 3, maxBodies = 2)
 

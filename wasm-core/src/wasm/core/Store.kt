@@ -921,13 +921,13 @@ public class Store(
     }
 
     internal fun linearHotCode(body: List<Instr>): LinearHotCode {
+        if (body is FrozenInstructions) {
+            val cached = body.linearHotCodeCache
+            if (cached != null && cached.owner === this) return cached.code
+        }
         if (lastLinearHotBody === body) return lastLinearHotCode
         linearHotCodes.firstOrNull { (candidate, _) -> candidate === body }
-            ?.let { (_, code) ->
-                lastLinearHotBody = body
-                lastLinearHotCode = code
-                return code
-            }
+            ?.let { (_, code) -> return rememberLinearHotCode(body, code) }
         val plan = ByteArray(body.size)
         var linearHotInstructionCount = 0
         for (index in body.indices) {
@@ -1058,6 +1058,13 @@ public class Store(
             }
         val code = LinearHotCode(packedInstructions, plan)
         linearHotCodes.add(body to code)
+        return rememberLinearHotCode(body, code)
+    }
+
+    private fun rememberLinearHotCode(body: List<Instr>, code: LinearHotCode): LinearHotCode {
+        if (body is FrozenInstructions) {
+            body.linearHotCodeCache = LinearHotCodeCache(this, code)
+        }
         lastLinearHotBody = body
         lastLinearHotCode = code
         return code
@@ -1734,6 +1741,11 @@ internal sealed class GuestExceptionHandler {
 internal class LinearHotCode(
     val packedInstructions: LongArray?,
     val plan: ByteArray,
+)
+
+internal class LinearHotCodeCache(
+    val owner: Store,
+    val code: LinearHotCode,
 )
 
 internal class PackedLinearCodeBudget(

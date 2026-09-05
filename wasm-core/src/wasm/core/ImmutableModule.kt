@@ -18,6 +18,22 @@ internal class FrozenList<T>(source: Iterable<T>) : AbstractList<T>() {
 
 internal fun <T> Iterable<T>.frozen(): List<T> = FrozenList(this)
 
+/**
+ * [linearHotCodeCache] holds a whole cache entry behind a single reference, so
+ * two stores racing over a shared module can only lose an entry; neither can
+ * read an owner and a plan that belong to different stores.
+ */
+internal class FrozenInstructions(source: List<Instr>) : AbstractList<Instr>() {
+    private val values: Array<Instr> = source.toTypedArray()
+
+    internal var linearHotCodeCache: LinearHotCodeCache? = null
+
+    override val size: Int
+        get() = values.size
+
+    override fun get(index: Int): Instr = values[index]
+}
+
 internal fun freezeDefinedType(type: DefinedType): DefinedType =
     when (type) {
         is FuncType -> type.copy(
@@ -33,7 +49,7 @@ internal fun freezeDefinedType(type: DefinedType): DefinedType =
     }
 
 internal fun freezeInstructions(instructions: List<Instr>): List<Instr> =
-    instructions.map(::freezeInstruction).frozen()
+    FrozenInstructions(instructions.map(::freezeInstruction))
 
 private fun freezeInstruction(instruction: Instr): Instr =
     when (instruction) {
