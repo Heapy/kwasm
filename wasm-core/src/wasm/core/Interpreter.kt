@@ -2031,7 +2031,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             0x0F -> finishFunction(store, frame)
-            0x1A -> repeat((instruction as Drop).n) { stack.removeLast() }
+            0x1A -> stack.dropLast((instruction as Drop).n)
             0x1B -> select(stack)
             0x1C -> select(stack)
             0x0C -> {
@@ -2241,7 +2241,7 @@ public class Interpreter : ResumableMachine {
                 val arguments = popArguments(stack, expected.params.size)
                 call(target, reference.index, arguments, tail = true)
             }
-            is Drop -> repeat(instruction.n) { stack.removeLast() }
+            is Drop -> stack.dropLast(instruction.n)
             Select -> select(stack)
             is SelectT -> select(stack)
             is I32Const -> stack.addLastI32(instruction.value)
@@ -2456,7 +2456,7 @@ public class Interpreter : ResumableMachine {
         val localsBase = store.localStack.size
         arguments.forEach(store.localStack::addLast)
         function.locals.forEach {
-            store.localStack.addLast(zeroOf(it, instance.module))
+            pushZeroLocal(store.localStack, it, instance.module)
         }
         pushGuestCallFrame(
             instance = instance,
@@ -2488,7 +2488,7 @@ public class Interpreter : ResumableMachine {
         val localsBase = store.localStack.size
         store.valueStack.moveTopTo(store.localStack, parameterCount)
         function.locals.forEach {
-            store.localStack.addLast(zeroOf(it, instance.module))
+            pushZeroLocal(store.localStack, it, instance.module)
         }
         val listener = store.config.listener
         pushGuestCallFrame(
@@ -2525,7 +2525,7 @@ public class Interpreter : ResumableMachine {
         val localsBase = store.localStack.size
         store.valueStack.moveTopTo(store.localStack, parameterCount)
         function.locals.forEach {
-            store.localStack.addLast(zeroOf(it, instance.module))
+            pushZeroLocal(store.localStack, it, instance.module)
         }
         val listener = store.config.listener
         val root = store.acquireGuestControl(
@@ -2869,11 +2869,19 @@ public class Interpreter : ResumableMachine {
         while (stack.size > size) stack.removeLast()
     }
 
+    private fun pushZeroLocal(stack: RuntimeValueStack, type: ValType, module: Module?) {
+        when (type) {
+            ValType.I32 -> stack.addLastI32(0)
+            ValType.I64 -> stack.addLastI64(0L)
+            ValType.F32 -> stack.addLastF32(0f)
+            ValType.F64 -> stack.addLastF64(0.0)
+            else -> stack.addLast(zeroOf(type, module))
+        }
+    }
+
     private fun select(stack: RuntimeValueStack) {
         val condition = stack.removeLastI32()
-        val second = stack.removeLast()
-        val first = stack.removeLast()
-        stack.addLast(if (condition != 0) first else second)
+        stack.selectLast(keepFirst = condition != 0)
     }
 
     private fun requireArguments(
@@ -3612,19 +3620,19 @@ public class Interpreter : ResumableMachine {
     }
 
     private fun execStore(instance: Instance, ins: Instr.Store, stack: RuntimeValueStack) {
-        val v = stack.removeLast()
+        val bits = stack.removeLastNumericBits()
         val mem = instance.memories[ins.memoryIndex]
         val base = effectiveAddress(stack, mem, ins.offset)
         when (ins.opcode) {
-            0x36 -> { mem.checkRange(base, 4); storeI32(mem, base, (v as Value.I32).v) }      // i32.store
-            0x37 -> { mem.checkRange(base, 8); storeI64(mem, base, (v as Value.I64).v) }      // i64.store
-            0x38 -> { mem.checkRange(base, 4); storeI32(mem, base, (v as Value.F32).v.toRawBits()) }
-            0x39 -> { mem.checkRange(base, 8); storeI64(mem, base, (v as Value.F64).v.toRawBits()) }
-            0x3A -> { mem.checkRange(base, 1); mem.data()[base.toInt()] = (v as Value.I32).v.toByte() }   // i32.store8
-            0x3B -> { mem.checkRange(base, 2); storeI16(mem, base, (v as Value.I32).v) }
-            0x3C -> { mem.checkRange(base, 1); mem.data()[base.toInt()] = (v as Value.I64).v.toByte() }
-            0x3D -> { mem.checkRange(base, 2); storeI16(mem, base, (v as Value.I64).v.toInt()) }
-            0x3E -> { mem.checkRange(base, 4); storeI32(mem, base, (v as Value.I64).v.toInt()) }
+            0x36 -> { mem.checkRange(base, 4); storeI32(mem, base, bits.toInt()) }      // i32.store
+            0x37 -> { mem.checkRange(base, 8); storeI64(mem, base, bits) }              // i64.store
+            0x38 -> { mem.checkRange(base, 4); storeI32(mem, base, bits.toInt()) }
+            0x39 -> { mem.checkRange(base, 8); storeI64(mem, base, bits) }
+            0x3A -> { mem.checkRange(base, 1); mem.data()[base.toInt()] = bits.toByte() }   // i32.store8
+            0x3B -> { mem.checkRange(base, 2); storeI16(mem, base, bits.toInt()) }
+            0x3C -> { mem.checkRange(base, 1); mem.data()[base.toInt()] = bits.toByte() }
+            0x3D -> { mem.checkRange(base, 2); storeI16(mem, base, bits.toInt()) }
+            0x3E -> { mem.checkRange(base, 4); storeI32(mem, base, bits.toInt()) }
             else -> throw Trap(TrapKind.UNREACHABLE, "unsupported store opcode 0x${ins.opcode.toString(16)}")
         }
     }

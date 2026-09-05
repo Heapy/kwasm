@@ -113,6 +113,42 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
         return Double.fromBits(bits[index])
     }
 
+    /**
+     * Pops a numeric slot as its raw bits: the two's-complement value for i32
+     * and i64, and [Float.toRawBits]/[Double.toRawBits] for f32 and f64. The
+     * NaN payload therefore survives unchanged.
+     */
+    fun removeLastNumericBits(): Long {
+        val index = checkedLastIndex()
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(tags[index] != OBJECT) { "value stack top is not a numeric value" }
+        }
+        size = index
+        return bits[index]
+    }
+
+    /** Replaces the top two slots with one of them, without materializing a [Value]. */
+    fun selectLast(keepFirst: Boolean) {
+        val secondIndex = checkedLastIndex()
+        val firstIndex = secondIndex - 1
+        check(firstIndex >= 0) { "value stack holds $size values; select needs two" }
+        if (!keepFirst) {
+            tags[firstIndex] = tags[secondIndex]
+            bits[firstIndex] = bits[secondIndex]
+            objects[firstIndex] = objects[secondIndex]
+        }
+        objects[secondIndex] = null
+        size = secondIndex
+    }
+
+    fun dropLast(count: Int) {
+        check(count >= 0) { "drop count $count is negative" }
+        check(count <= size) { "value stack holds $size values; cannot drop $count" }
+        val target = size - count
+        for (index in target until size) objects[index] = null
+        size = target
+    }
+
     fun last(): Value = valueAt(checkedLastIndex())
 
     operator fun get(index: Int): Value {
