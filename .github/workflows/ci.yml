@@ -70,6 +70,13 @@ jobs:
           :tck:verifyWast2JsonExclusions
           :tck:verifyWasiTestsuiteExclusions
 
+      - name: Run core and TCK tests with validated-stack checks enabled
+        run: >-
+          ./gradlew --stacktrace
+          -Pkwasm.validatedStackChecks=true
+          :core:jvmTest
+          :tck:jvmTest
+
       - name: Run end-to-end smoke program
         run: ./gradlew --stacktrace :samples-cli:run
 

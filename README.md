@@ -140,6 +140,21 @@ Kotlin/Native downloads its compiler distribution on the first native build.
 Apple targets require macOS and Xcode. An iOS device target is compiled in CI
 but cannot be run without a provisioned device.
 
+The interpreter's value stack carries a type tag per slot. Module validation
+already establishes the operand types and stack heights, so the tag and bounds
+assertions in the typed accessors are off by default and those accessors stay
+branch-free on every target. With them off, an access that a validation bug
+lets through reads the wrong slot instead of failing. Turn them on to make such
+a bug surface as an `IllegalStateException` at the access:
+
+```shell
+./gradlew :core:jvmTest -Pkwasm.validatedStackChecks=true
+```
+
+The flag is a compile-time constant, so it applies the same way on JVM,
+Android and Native, and an off build carries no residual branch. CI runs the
+core and TCK suites once with the checks enabled.
+
 ## Quick start: decode and invoke
 
 Within this repository, add `implementation(project(":core"))` to a

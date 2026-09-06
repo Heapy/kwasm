@@ -1,16 +1,6 @@
 package io.heapy.kwasm
 
 /**
- * Controls redundant tag assertions in validated interpreter paths.
- *
- * JVM-like targets retain the assertions as inexpensive invariant checks.
- * Kotlin/Native compiles them out after module validation has established the
- * operand and local types. Tags themselves remain available to generic,
- * reference, copy, and snapshot boundaries on every platform.
- */
-internal expect val CHECK_VALIDATED_TYPED_STACK_TAGS: Boolean
-
-/**
  * Interpreter value stack with unboxed numeric slots.
  *
  * Numeric [Value] wrappers remain the public boundary representation, but
@@ -78,8 +68,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
     }
 
     fun removeLastI32(): Int {
-        val index = checkedLastIndex()
+        val index = size - 1
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(index >= 0) { "value stack is empty" }
             check(tags[index] == I32) { "value stack top is not i32" }
         }
         size = index
@@ -87,8 +78,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
     }
 
     fun removeLastI64(): Long {
-        val index = checkedLastIndex()
+        val index = size - 1
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(index >= 0) { "value stack is empty" }
             check(tags[index] == I64) { "value stack top is not i64" }
         }
         size = index
@@ -96,8 +88,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
     }
 
     fun removeLastF32(): Float {
-        val index = checkedLastIndex()
+        val index = size - 1
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(index >= 0) { "value stack is empty" }
             check(tags[index] == F32) { "value stack top is not f32" }
         }
         size = index
@@ -105,8 +98,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
     }
 
     fun removeLastF64(): Double {
-        val index = checkedLastIndex()
+        val index = size - 1
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(index >= 0) { "value stack is empty" }
             check(tags[index] == F64) { "value stack top is not f64" }
         }
         size = index
@@ -119,8 +113,9 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
      * NaN payload therefore survives unchanged.
      */
     fun removeLastNumericBits(): Long {
-        val index = checkedLastIndex()
+        val index = size - 1
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            check(index >= 0) { "value stack is empty" }
             check(tags[index] != OBJECT) { "value stack top is not a numeric value" }
         }
         size = index
@@ -157,15 +152,15 @@ internal class RuntimeValueStack(initialCapacity: Int = 32) {
     }
 
     fun getI32(index: Int): Int {
-        checkIndex(index)
         if (CHECK_VALIDATED_TYPED_STACK_TAGS) {
+            checkIndex(index)
             check(tags[index] == I32) { "value stack slot $index is not i32" }
         }
         return bits[index].toInt()
     }
 
     fun setI32(index: Int, value: Int) {
-        checkIndex(index)
+        if (CHECK_VALIDATED_TYPED_STACK_TAGS) checkIndex(index)
         tags[index] = I32
         bits[index] = value.toLong()
         objects[index] = null

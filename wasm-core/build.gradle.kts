@@ -8,6 +8,38 @@ plugins {
     `maven-publish`
 }
 
+/**
+ * Assertion level for validated interpreter paths. Tests and debug builds turn
+ * the redundant tag and bounds assertions on; a release build leaves them off
+ * so the typed value-stack accessors stay branch-free. The value is a
+ * compile-time constant on every target, so an off build carries no residual
+ * load or branch.
+ */
+val validatedStackChecks: Provider<Boolean> =
+    providers.gradleProperty("kwasm.validatedStackChecks")
+        .map(String::toBooleanStrict)
+        .orElse(false)
+
+val generateValidatedStackChecks by tasks.registering {
+    val enabled = validatedStackChecks
+    val outputDirectory = layout.buildDirectory.dir("generated/validatedStackChecks/kotlin")
+    inputs.property("enabled", enabled)
+    outputs.dir(outputDirectory)
+    doLast {
+        val file = outputDirectory.get()
+            .file("io/heapy/kwasm/ValidatedStackChecks.kt")
+            .asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            package io.heapy.kwasm
+
+            internal const val CHECK_VALIDATED_TYPED_STACK_TAGS: Boolean = ${enabled.get()}
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
 kotlin {
     explicitApiWarning()
     jvmToolchain(17)
@@ -34,6 +66,7 @@ kotlin {
     sourceSets {
         commonMain {
             kotlin.srcDir("src")
+            kotlin.srcDir(generateValidatedStackChecks)
             dependencies {
                 api(project(":annotations"))
                 api(libs.kotlinx.coroutines.core)
