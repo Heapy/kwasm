@@ -1,18 +1,16 @@
 package io.heapy.kwasm.snapshot
 
 import io.heapy.kwasm.ArrayObject
-import io.heapy.kwasm.ArrayType
 import io.heapy.kwasm.FuelExhaustionPolicy
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.GcObject
 import io.heapy.kwasm.GuestException
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.RuntimeHostSnapshot
 import io.heapy.kwasm.RuntimeBodyBranch
 import io.heapy.kwasm.RuntimeBodyStep
 import io.heapy.kwasm.RuntimeControlKind
 import io.heapy.kwasm.RuntimeControlSnapshot
 import io.heapy.kwasm.RuntimeFrameSnapshot
+import io.heapy.kwasm.RuntimeHostSnapshot
 import io.heapy.kwasm.RuntimeInstanceSnapshot
 import io.heapy.kwasm.RuntimeMemorySnapshot
 import io.heapy.kwasm.RuntimePendingImportSnapshot
@@ -22,10 +20,12 @@ import io.heapy.kwasm.SnapshotFormatException
 import io.heapy.kwasm.SnapshotStateException
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StructObject
-import io.heapy.kwasm.StructType
 import io.heapy.kwasm.TagInstance
 import io.heapy.kwasm.Value
 import io.heapy.kwasm.WASM_RUNTIME_VERSION
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.StructType
 
 internal object SnapshotBinary {
     private val magic = byteArrayOf(

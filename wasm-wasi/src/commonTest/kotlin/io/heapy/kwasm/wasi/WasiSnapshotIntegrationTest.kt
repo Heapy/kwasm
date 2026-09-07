@@ -1,23 +1,23 @@
 package io.heapy.kwasm.wasi
 
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.SnapshotStateException
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
 import io.heapy.kwasm.StoreStatus
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.snapshot.KwasmSnapshot
 import io.heapy.kwasm.snapshot.SnapshotHooks
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 class WasiSnapshotIntegrationTest {
     @Test

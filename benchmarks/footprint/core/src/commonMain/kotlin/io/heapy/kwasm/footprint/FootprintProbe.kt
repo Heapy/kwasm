@@ -6,11 +6,11 @@
 package io.heapy.kwasm.footprint
 
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.Value
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.Module
 import kotlin.experimental.ExperimentalObjCName
 import kotlin.native.ObjCName
+import kotlinx.coroutines.runBlocking
 
 @ObjCName("KwasmFootprintCoreProbe", exact = true)
 public class FootprintProbe {

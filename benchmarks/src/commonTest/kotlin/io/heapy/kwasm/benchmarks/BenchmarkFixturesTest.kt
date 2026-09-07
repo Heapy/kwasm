@@ -2,11 +2,11 @@ package io.heapy.kwasm.benchmarks
 
 import io.heapy.kwasm.CheckpointMode
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.Module
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlinx.coroutines.runBlocking
 
 class BenchmarkFixturesTest {
     @Test

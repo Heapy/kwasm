@@ -1,11 +1,19 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.FcIndex
-import io.heapy.kwasm.Instr.I32Const
-import io.heapy.kwasm.Instr.Simple
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Instr.FcIndex
+import io.heapy.kwasm.binary.Instr.I32Const
+import io.heapy.kwasm.binary.Instr.Simple
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.coroutines.runBlocking
 
 class I32ExpressionPlanTest {
     @Test

@@ -3,28 +3,28 @@ package io.heapy.kwasm.bindgen.runtime
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.LinkException
 import io.heapy.kwasm.Linker
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.PauseHandle
 import io.heapy.kwasm.SnapshotFormatException
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeAbi
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeLimits
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeRequestCodec
 import io.heapy.kwasm.bindgen.WasmImportBinding
 import io.heapy.kwasm.snapshot.KwasmSnapshot
 import io.heapy.kwasm.wat.WatComposer
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertContains
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 
 class KwasmBindgenHostImportsTest {
     @Test

@@ -1,14 +1,30 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.Br
-import io.heapy.kwasm.Instr.Call
-import io.heapy.kwasm.Instr.FcIndex
-import io.heapy.kwasm.Instr.I32Const
-import io.heapy.kwasm.Instr.If
-import io.heapy.kwasm.Instr.Loop
-import io.heapy.kwasm.Instr.Nop
-import io.heapy.kwasm.Instr.Simple
-import io.heapy.kwasm.Instr.TryTable
+import io.heapy.kwasm.binary.BlockType
+import io.heapy.kwasm.binary.CatchClause
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Instr.Br
+import io.heapy.kwasm.binary.Instr.Call
+import io.heapy.kwasm.binary.Instr.FcIndex
+import io.heapy.kwasm.binary.Instr.I32Const
+import io.heapy.kwasm.binary.Instr.If
+import io.heapy.kwasm.binary.Instr.Loop
+import io.heapy.kwasm.binary.Instr.Nop
+import io.heapy.kwasm.binary.Instr.Simple
+import io.heapy.kwasm.binary.Instr.TryTable
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -19,10 +35,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 
 class SuspensionSemanticsTest {
     @Test

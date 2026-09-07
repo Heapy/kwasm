@@ -1,5 +1,27 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.AnyRefType
+import io.heapy.kwasm.binary.ArrayRefType
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.EqRefType
+import io.heapy.kwasm.binary.ExnRefType
+import io.heapy.kwasm.binary.ExternRefType
+import io.heapy.kwasm.binary.FieldType
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Limits
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.StorageType
+import io.heapy.kwasm.binary.StructRefType
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.TableType
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

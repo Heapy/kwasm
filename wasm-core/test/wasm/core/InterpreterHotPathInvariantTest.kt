@@ -1,20 +1,27 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.Block
-import io.heapy.kwasm.Instr.Br
-import io.heapy.kwasm.Instr.BrIf
-import io.heapy.kwasm.Instr.Call
-import io.heapy.kwasm.Instr.FcIndex
-import io.heapy.kwasm.Instr.I32Const
-import io.heapy.kwasm.Instr.I64Const
-import io.heapy.kwasm.Instr.Loop
-import io.heapy.kwasm.Instr.Simple
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import io.heapy.kwasm.binary.BlockType
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FrozenInstructions
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Instr.Block
+import io.heapy.kwasm.binary.Instr.Br
+import io.heapy.kwasm.binary.Instr.BrIf
+import io.heapy.kwasm.binary.Instr.Call
+import io.heapy.kwasm.binary.Instr.FcIndex
+import io.heapy.kwasm.binary.Instr.I32Const
+import io.heapy.kwasm.binary.Instr.I64Const
+import io.heapy.kwasm.binary.Instr.Loop
+import io.heapy.kwasm.binary.Instr.Simple
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -24,6 +31,12 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class InterpreterHotPathInvariantTest {
     @Test

@@ -1,5 +1,15 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.GlobalType
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.MemoryType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.TableType
+
 /**
  * A linear memory instance. Backed by a growable [ByteArray].
  *

@@ -1,6 +1,14 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.*
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Instr.*
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.StorageType
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.ValType
 
 /**
  * Evaluates a Wasm 3 constant (init) expression over a small value stack.

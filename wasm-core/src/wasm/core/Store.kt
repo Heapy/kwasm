@@ -1,5 +1,12 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Module
+import kotlin.concurrent.Volatile
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DisposableHandle
 import kotlinx.coroutines.InternalCoroutinesApi
@@ -12,10 +19,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
-import kotlin.concurrent.Volatile
-import kotlin.coroutines.ContinuationInterceptor
-import kotlin.coroutines.CoroutineContext
-import kotlin.coroutines.EmptyCoroutineContext
 
 /** Policy used when an enabled fuel counter cannot pay for the next instruction. */
 @io.heapy.kwasm.ExperimentalKwasmApi

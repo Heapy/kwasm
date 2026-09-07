@@ -1,4 +1,4 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
 /**
  * In-memory representation of a decoded WebAssembly module.

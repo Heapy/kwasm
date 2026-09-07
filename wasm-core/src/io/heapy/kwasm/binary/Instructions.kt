@@ -1,4 +1,4 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
 /**
  * Instruction AST. Each instruction is a flat data object capturing its opcode

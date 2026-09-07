@@ -1,12 +1,10 @@
 package io.heapy.kwasm.bindgen.runtime
 
 import io.heapy.kwasm.CallerAwareHostFunction
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.HostCallContext
 import io.heapy.kwasm.HostImport
 import io.heapy.kwasm.HostSnapshotHooks
 import io.heapy.kwasm.HostSnapshotRestore
-import io.heapy.kwasm.IndexType
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.InstanceScopedHostSnapshotParticipant
 import io.heapy.kwasm.Linker
@@ -14,8 +12,10 @@ import io.heapy.kwasm.MemoryInstance
 import io.heapy.kwasm.SnapshotFormatException
 import io.heapy.kwasm.SnapshotStateException
 import io.heapy.kwasm.Store
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.ValType
 import io.heapy.kwasm.bindgen.WasmGuestBindingNotInstalledException
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeAbi
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeLimits

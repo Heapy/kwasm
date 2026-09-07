@@ -1,14 +1,23 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.Block
-import io.heapy.kwasm.Instr.BrTable
-import io.heapy.kwasm.Instr.I32Const
-import io.heapy.kwasm.Instr.RawImmediate
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.BlockType
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Instr.Block
+import io.heapy.kwasm.binary.Instr.BrTable
+import io.heapy.kwasm.binary.Instr.I32Const
+import io.heapy.kwasm.binary.Instr.RawImmediate
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlinx.coroutines.runBlocking
 
 class ModuleImmutabilityTest {
     @Test

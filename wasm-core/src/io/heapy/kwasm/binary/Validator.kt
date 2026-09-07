@@ -1,7 +1,7 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
-import io.heapy.kwasm.Instr.*
-import io.heapy.kwasm.Instr.Store as StoreInstruction
+import io.heapy.kwasm.binary.Instr.*
+import io.heapy.kwasm.binary.Instr.Store as StoreInstruction
 
 /**
  * Resource ceilings applied by [ModuleValidator].

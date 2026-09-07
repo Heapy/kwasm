@@ -1,12 +1,17 @@
 package io.heapy.kwasm
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Limits
+import io.heapy.kwasm.binary.Memory
+import io.heapy.kwasm.binary.MemoryType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -15,6 +20,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 class SnapshotSuspensionSafetyJvmTest {
     @Test

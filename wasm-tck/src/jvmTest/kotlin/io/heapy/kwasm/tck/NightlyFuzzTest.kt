@@ -1,6 +1,6 @@
 package io.heapy.kwasm.tck
 
-import io.heapy.kwasm.Module
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.wat.WatComposer
 import java.nio.file.Files
 import java.nio.file.Path

@@ -1,7 +1,7 @@
 package io.heapy.kwasm.benchmarks
 
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
+import io.heapy.kwasm.binary.Module
 import kotlinx.benchmark.Benchmark
 import kotlinx.benchmark.Scope
 import kotlinx.benchmark.Setup

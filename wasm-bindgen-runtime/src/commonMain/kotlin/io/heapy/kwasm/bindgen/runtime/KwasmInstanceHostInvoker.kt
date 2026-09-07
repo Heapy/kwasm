@@ -1,11 +1,11 @@
 package io.heapy.kwasm.bindgen.runtime
 
 import io.heapy.kwasm.ExportedFunction
-import io.heapy.kwasm.IndexType
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.MemoryInstance
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.ValType
 import io.heapy.kwasm.bindgen.WasmGuestRuntimeAbi
 import io.heapy.kwasm.bindgen.WasmHostInvoker
 import kotlinx.coroutines.sync.Mutex

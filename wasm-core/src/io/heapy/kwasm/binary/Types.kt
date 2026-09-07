@@ -1,4 +1,4 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
 /**
  * WebAssembly value types (binary encoding in brackets).

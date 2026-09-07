@@ -1,10 +1,33 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.*
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.BlockType
+import io.heapy.kwasm.binary.CatchClause
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FieldType
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Instr.*
+import io.heapy.kwasm.binary.LegacyCatch
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.StorageType
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.Tag
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlinx.coroutines.runBlocking
 
 class GcEhExecutionTest {
     @Test

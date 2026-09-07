@@ -1,15 +1,15 @@
 package io.heapy.kwasm.benchmarks
 
 import io.heapy.kwasm.CheckpointMode
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.HostFunction
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.Linker
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ValType
 import kotlinx.benchmark.Benchmark
 import kotlinx.benchmark.Scope
 import kotlinx.benchmark.Setup

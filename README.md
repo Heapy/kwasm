@@ -175,11 +175,11 @@ Within this repository, add `implementation(project(":core"))` to a
 import io.heapy.kwasm.ExecutionLimits
 import io.heapy.kwasm.FuelExhaustionPolicy
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.ModuleValidationLimits
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleValidationLimits
 import kotlinx.coroutines.withTimeout
 
 suspend fun add(wasmBytes: ByteArray): Int {
@@ -229,12 +229,12 @@ Imports are supplied in WebAssembly function-index order. Each import carries
 its exact Wasm function type:
 
 ```kotlin
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.HostFunction
 import io.heapy.kwasm.HostImport
 import io.heapy.kwasm.ResolvedImports
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.ValType
 import kotlinx.coroutines.delay
 
 val lookup = HostImport(
@@ -267,8 +267,8 @@ The default `random_get` source is cryptographically secure host entropy:
 testing or another embedder-managed source is required.
 
 ```kotlin
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.Store
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.wasi.BufferWasiOutput
 import io.heapy.kwasm.wasi.InMemoryFileSystem
 import io.heapy.kwasm.wasi.WasiConfig

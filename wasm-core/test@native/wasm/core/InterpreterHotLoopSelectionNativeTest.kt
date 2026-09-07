@@ -1,10 +1,20 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.Call
-import io.heapy.kwasm.Instr.FcIndex
-import io.heapy.kwasm.Instr.I32Const
-import io.heapy.kwasm.Instr.Simple
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.CustomSection
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Instr.Call
+import io.heapy.kwasm.binary.Instr.FcIndex
+import io.heapy.kwasm.binary.Instr.I32Const
+import io.heapy.kwasm.binary.Instr.Simple
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleBuilder
+import io.heapy.kwasm.binary.ModuleValidator
+import io.heapy.kwasm.binary.ValType
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -12,6 +22,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class InterpreterHotLoopSelectionNativeTest {
     @Test

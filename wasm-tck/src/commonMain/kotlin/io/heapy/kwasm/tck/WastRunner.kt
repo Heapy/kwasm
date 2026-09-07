@@ -1,22 +1,22 @@
 package io.heapy.kwasm.tck
 
-import io.heapy.kwasm.ExportDesc
-import io.heapy.kwasm.FuncType
-import io.heapy.kwasm.HeapType
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.LinkException
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.RefType
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.TrapKind
 import io.heapy.kwasm.UncaughtWasmException
-import io.heapy.kwasm.ValType
-import io.heapy.kwasm.ValidationException
 import io.heapy.kwasm.Value
-import io.heapy.kwasm.isNullRef
-import io.heapy.kwasm.WasmDecodeException
 import io.heapy.kwasm.WasmInstantiationException
 import io.heapy.kwasm.WasmTrap
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.ValType
+import io.heapy.kwasm.binary.ValidationException
+import io.heapy.kwasm.binary.WasmDecodeException
+import io.heapy.kwasm.isNullRef
 import kotlin.coroutines.cancellation.CancellationException
 
 /** Supplies `.wasm` assets named by a `wast2json` manifest. */

@@ -1,5 +1,10 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.CatchClause
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.LegacyCatch
+
 internal enum class ControlKind {
     Function,
     Block,

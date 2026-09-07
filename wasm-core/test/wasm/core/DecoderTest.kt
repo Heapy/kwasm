@@ -1,14 +1,24 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.Load
-import io.heapy.kwasm.Instr.RawImmediate
-import kotlinx.coroutines.runBlocking
+import io.heapy.kwasm.binary.ByteReader
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Instr.Load
+import io.heapy.kwasm.binary.Instr.RawImmediate
+import io.heapy.kwasm.binary.InvalidModule
+import io.heapy.kwasm.binary.LimitExceeded
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleValidationLimits
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.UnsupportedFeature
+import io.heapy.kwasm.binary.ValidationException
+import io.heapy.kwasm.binary.WasmDecodeException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class DecoderTest {
     @Test

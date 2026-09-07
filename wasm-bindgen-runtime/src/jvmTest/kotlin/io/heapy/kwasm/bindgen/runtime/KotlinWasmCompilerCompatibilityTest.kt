@@ -1,13 +1,13 @@
 package io.heapy.kwasm.bindgen.runtime
 
 import io.heapy.kwasm.ExternalValue
-import io.heapy.kwasm.ImportDesc
-import io.heapy.kwasm.Instr
 import io.heapy.kwasm.Linker
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.ModuleValidationLimits
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ModuleValidationLimits
 import io.heapy.kwasm.bindgen.WasmAbiArguments
 import io.heapy.kwasm.bindgen.WasmAbiCodec
 import io.heapy.kwasm.bindgen.WasmAbiValue
@@ -18,11 +18,11 @@ import io.heapy.kwasm.wasi.WASI_SNAPSHOT_PREVIEW1
 import io.heapy.kwasm.wasi.WasiConfig
 import io.heapy.kwasm.wasi.WasiPreview1
 import java.io.File
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class KotlinWasmCompilerCompatibilityTest {
     @Test

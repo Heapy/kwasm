@@ -1,5 +1,6 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.Module
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

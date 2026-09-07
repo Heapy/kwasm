@@ -1,5 +1,9 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.FrozenCodeCache
+import io.heapy.kwasm.binary.FrozenInstructions
+import io.heapy.kwasm.binary.Instr
+
 /**
  * Immutable dispatch metadata for one instruction body. [packedInstructions]
  * is absent when the body exceeds the cache budget or is too sparse; the
@@ -14,7 +18,7 @@ internal class LinearHotCode(
 internal class LinearHotCodeCache(
     val owner: LinearCodePlanner,
     val code: LinearHotCode,
-)
+) : FrozenCodeCache
 
 internal class PackedLinearCodeBudget(
     private val maxInstructions: Int,
@@ -63,7 +67,7 @@ internal class LinearCodePlanner {
 
     fun planFor(body: List<Instr>): LinearHotCode {
         if (body is FrozenInstructions) {
-            val cached = body.linearHotCodeCache
+            val cached = body.linearHotCodeCache as? LinearHotCodeCache
             if (cached != null && cached.owner === this) return cached.code
         }
         if (lastBody === body) return lastCode

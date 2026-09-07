@@ -1,11 +1,26 @@
 package io.heapy.kwasm
 
-import io.heapy.kwasm.Instr.*
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.BlockType
+import io.heapy.kwasm.binary.CatchClause
+import io.heapy.kwasm.binary.ElementMode
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.Instr
+import io.heapy.kwasm.binary.Instr.*
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.StorageType
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.ValType
+import io.heapy.kwasm.binary.functionTypesEquivalent
+import kotlin.math.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlin.math.*
 
 private const val HOISTED_COMPARE_BRANCH_OUTCOME_NOT_FUSED: Long = -2L
 private const val HOISTED_COMPARE_BRANCH_OUTCOME_FALLTHROUGH: Long = -1L

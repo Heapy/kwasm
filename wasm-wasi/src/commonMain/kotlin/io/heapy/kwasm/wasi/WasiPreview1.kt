@@ -1,22 +1,22 @@
 package io.heapy.kwasm.wasi
 
 import io.heapy.kwasm.ExecutionTrap
-import io.heapy.kwasm.FuncType
-import io.heapy.kwasm.HostSnapshotHooks
-import io.heapy.kwasm.HostSnapshotRestore
 import io.heapy.kwasm.HostFunction
 import io.heapy.kwasm.HostImport
-import io.heapy.kwasm.ImportDesc
+import io.heapy.kwasm.HostSnapshotHooks
+import io.heapy.kwasm.HostSnapshotRestore
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.InstanceScopedHostSnapshotParticipant
 import io.heapy.kwasm.LinkException
 import io.heapy.kwasm.MemoryInstance
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.ResolvedImports
 import io.heapy.kwasm.SnapshotStateException
 import io.heapy.kwasm.Store
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ValType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.yield
 

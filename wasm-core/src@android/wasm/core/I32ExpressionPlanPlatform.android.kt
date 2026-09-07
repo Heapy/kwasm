@@ -1,5 +1,7 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.Instr
+
 internal actual const val USE_TWO_SLOT_I32_EXPRESSION_PLAN: Boolean = false
 
 @Suppress("NOTHING_TO_INLINE", "UNUSED_PARAMETER")

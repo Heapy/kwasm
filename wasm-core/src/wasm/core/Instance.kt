@@ -1,5 +1,29 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.ArrayType
+import io.heapy.kwasm.binary.DataMode
+import io.heapy.kwasm.binary.DataSegment
+import io.heapy.kwasm.binary.ElementMode
+import io.heapy.kwasm.binary.ElementSegment
+import io.heapy.kwasm.binary.Export
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Function
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.StorageType
+import io.heapy.kwasm.binary.StructType
+import io.heapy.kwasm.binary.ValType
+import io.heapy.kwasm.binary.functionTypesEquivalent
+import io.heapy.kwasm.binary.normalizeRefType
+import io.heapy.kwasm.binary.valueTypeSubtypeAcross
+import io.heapy.kwasm.binary.valueTypesEquivalent
+
 internal class FlatDirectCallTable(
     val importedFunctionCount: Int,
     val functions: Array<Function>,

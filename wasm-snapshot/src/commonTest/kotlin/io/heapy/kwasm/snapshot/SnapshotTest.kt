@@ -4,14 +4,12 @@ import io.heapy.kwasm.ArrayObject
 import io.heapy.kwasm.ExecutionLimits
 import io.heapy.kwasm.ExecutionListener
 import io.heapy.kwasm.FuelExhaustionPolicy
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.GuestException
 import io.heapy.kwasm.HostImport
 import io.heapy.kwasm.HostSnapshotHooks
 import io.heapy.kwasm.HostSnapshotRestore
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.InstanceScopedHostSnapshotParticipant
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.PauseHandle
 import io.heapy.kwasm.ResolvedImports
 import io.heapy.kwasm.RuntimeInstanceSnapshot
@@ -25,13 +23,9 @@ import io.heapy.kwasm.StoreStatus
 import io.heapy.kwasm.StructObject
 import io.heapy.kwasm.UncaughtWasmException
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.wat.WatComposer
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -39,6 +33,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 class SnapshotTest {
     @Test

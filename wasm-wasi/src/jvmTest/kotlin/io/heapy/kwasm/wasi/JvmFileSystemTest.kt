@@ -1,9 +1,9 @@
 package io.heapy.kwasm.wasi
 
-import io.heapy.kwasm.Limits
 import io.heapy.kwasm.MemoryInstance
-import io.heapy.kwasm.MemoryType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Limits
+import io.heapy.kwasm.binary.MemoryType
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test

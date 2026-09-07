@@ -1,5 +1,13 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.AnyRefType
+import io.heapy.kwasm.binary.ExternRefType
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.ValType
 import kotlin.math.*
 
 // ---- value stack extension helpers ----

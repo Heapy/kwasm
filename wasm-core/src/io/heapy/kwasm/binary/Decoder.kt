@@ -1,6 +1,6 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
-import io.heapy.kwasm.Instr.*
+import io.heapy.kwasm.binary.Instr.*
 
 /**
  * Decoder for the WebAssembly binary format.

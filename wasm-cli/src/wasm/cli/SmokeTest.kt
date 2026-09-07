@@ -1,6 +1,8 @@
 package io.heapy.kwasm.cli
 
 import io.heapy.kwasm.*
+import io.heapy.kwasm.binary.*
+import io.heapy.kwasm.binary.ExportDesc
 import io.heapy.kwasm.wat.WatComposer
 import kotlinx.coroutines.runBlocking
 

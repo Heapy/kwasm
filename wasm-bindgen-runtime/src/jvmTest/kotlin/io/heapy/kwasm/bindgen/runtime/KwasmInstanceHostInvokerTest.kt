@@ -1,19 +1,19 @@
 package io.heapy.kwasm.bindgen.runtime
 
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.bindgen.WasmAbiCodec
 import io.heapy.kwasm.bindgen.WasmAbiValue
 import io.heapy.kwasm.bindgen.WasmBoundary
 import io.heapy.kwasm.wat.WatComposer
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 @WasmBoundary(name = "test:runtime")
 public interface RuntimeFixture {

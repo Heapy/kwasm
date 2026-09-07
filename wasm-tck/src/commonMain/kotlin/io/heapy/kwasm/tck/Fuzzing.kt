@@ -1,8 +1,8 @@
 package io.heapy.kwasm.tck
 
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.ValidationException
-import io.heapy.kwasm.WasmDecodeException
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ValidationException
+import io.heapy.kwasm.binary.WasmDecodeException
 
 public data class DecoderFuzzReport(
     public val seed: ULong,

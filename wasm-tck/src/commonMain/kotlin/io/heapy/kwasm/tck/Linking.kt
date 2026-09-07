@@ -1,30 +1,30 @@
 package io.heapy.kwasm.tck
 
-import io.heapy.kwasm.ExportDesc
-import io.heapy.kwasm.FuncRefType
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.GlobalInstance
-import io.heapy.kwasm.GlobalType
 import io.heapy.kwasm.GuestFunctionAddress
 import io.heapy.kwasm.HostFunction
 import io.heapy.kwasm.HostImport
-import io.heapy.kwasm.ImportDesc
-import io.heapy.kwasm.IndexType
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Limits
 import io.heapy.kwasm.LinkException
 import io.heapy.kwasm.MemoryInstance
-import io.heapy.kwasm.MemoryType
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.Mutability
-import io.heapy.kwasm.RefType
 import io.heapy.kwasm.ResolvedImports
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.TableInstance
-import io.heapy.kwasm.TableType
 import io.heapy.kwasm.TagInstance
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncRefType
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.GlobalType
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.IndexType
+import io.heapy.kwasm.binary.Limits
+import io.heapy.kwasm.binary.MemoryType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.RefType
+import io.heapy.kwasm.binary.TableType
+import io.heapy.kwasm.binary.ValType
 
 public fun interface TckFunction {
     public suspend fun invoke(arguments: List<Value>): List<Value>
@@ -183,7 +183,7 @@ private fun spectestModule(): TckRegisteredModule {
     val memory = MemoryInstance(MemoryType(Limits(1u, 2u, indexType = IndexType.I32)))
     val table = TableInstance(TableType(FuncRefType, Limits(10u, 20u)))
 
-    fun print(params: List<io.heapy.kwasm.ValType>): TckExtern.Function =
+    fun print(params: List<io.heapy.kwasm.binary.ValType>): TckExtern.Function =
         TckExtern.Function(FuncType(params, emptyList())) { emptyList() }
 
     return TckRegisteredModule(

@@ -4,13 +4,13 @@ import io.heapy.kwasm.ExecutionLimits
 import io.heapy.kwasm.ExecutionListener
 import io.heapy.kwasm.FuelExhaustionPolicy
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.PauseHandle
 import io.heapy.kwasm.ResolvedImports
 import io.heapy.kwasm.SnapshotException
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.Module
 import io.heapy.kwasm.snapshot.KwasmSnapshot
 import io.heapy.kwasm.snapshot.SnapshotLimits
 import io.heapy.kwasm.wat.WatComposer

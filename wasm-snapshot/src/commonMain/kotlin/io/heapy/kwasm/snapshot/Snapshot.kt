@@ -1,10 +1,9 @@
 package io.heapy.kwasm.snapshot
 
-import io.heapy.kwasm.FuelExhaustionPolicy
 import io.heapy.kwasm.CheckpointMode
+import io.heapy.kwasm.FuelExhaustionPolicy
 import io.heapy.kwasm.HostSnapshotHooks
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Module
 import io.heapy.kwasm.ResolvedImports
 import io.heapy.kwasm.RuntimeHostSnapshot
 import io.heapy.kwasm.RuntimeStoreSnapshot
@@ -13,6 +12,7 @@ import io.heapy.kwasm.SnapshotModuleMismatch
 import io.heapy.kwasm.SnapshotStateException
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.WASM_RUNTIME_VERSION
+import io.heapy.kwasm.binary.Module
 
 /** Allocation and structural ceilings applied before decoding untrusted bytes. */
 @io.heapy.kwasm.ExperimentalKwasmApi

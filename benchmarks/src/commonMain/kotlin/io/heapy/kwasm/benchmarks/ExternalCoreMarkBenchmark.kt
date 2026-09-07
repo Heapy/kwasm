@@ -1,12 +1,12 @@
 package io.heapy.kwasm.benchmarks
 
-import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.Instance
 import io.heapy.kwasm.Linker
 import io.heapy.kwasm.MemoryInstance
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.ValType
 import kotlinx.benchmark.Benchmark
 import kotlinx.benchmark.Scope
 import kotlinx.benchmark.Setup

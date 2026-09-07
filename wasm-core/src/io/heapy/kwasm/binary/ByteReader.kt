@@ -1,4 +1,4 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
 /**
  * Unsigned + signed LEB128 and primitive reader over a byte array.

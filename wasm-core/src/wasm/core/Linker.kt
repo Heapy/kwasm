@@ -1,5 +1,17 @@
 package io.heapy.kwasm
 
+import io.heapy.kwasm.binary.ExportDesc
+import io.heapy.kwasm.binary.FuncType
+import io.heapy.kwasm.binary.Import
+import io.heapy.kwasm.binary.ImportDesc
+import io.heapy.kwasm.binary.MemoryType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.Mutability
+import io.heapy.kwasm.binary.TableType
+import io.heapy.kwasm.binary.functionTypesEquivalent
+import io.heapy.kwasm.binary.valueTypeSubtypeAcross
+import io.heapy.kwasm.binary.valueTypesEquivalent
+
 /**
  * A runtime external value that can satisfy an import or be registered from an
  * instance export. Function and tag values retain their defining identity.

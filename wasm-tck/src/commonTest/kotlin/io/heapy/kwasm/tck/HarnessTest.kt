@@ -1,23 +1,23 @@
 package io.heapy.kwasm.tck
 
 import io.heapy.kwasm.ExecutionLimits
-import io.heapy.kwasm.HeapType
-import io.heapy.kwasm.Module
-import io.heapy.kwasm.RefType
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.StoreConfig
 import io.heapy.kwasm.Value
+import io.heapy.kwasm.binary.HeapType
+import io.heapy.kwasm.binary.Module
+import io.heapy.kwasm.binary.RefType
 import io.heapy.kwasm.wat.WatComposer
-import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
-import kotlin.test.assertNull
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class HarnessTest {
     @Test

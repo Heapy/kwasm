@@ -1,4 +1,4 @@
-package io.heapy.kwasm
+package io.heapy.kwasm.binary
 
 /**
  * A list implementation that cannot be recovered as a [MutableList] by a
@@ -19,6 +19,13 @@ internal class FrozenList<T>(source: Iterable<T>) : AbstractList<T>() {
 internal fun <T> Iterable<T>.frozen(): List<T> = FrozenList(this)
 
 /**
+ * A planner's cache entry for one frozen body. Declared here so the runtime
+ * planner, which this package must not reference, can still park a whole entry
+ * on the body it planned.
+ */
+internal interface FrozenCodeCache
+
+/**
  * [linearHotCodeCache] holds a whole cache entry behind a single reference, so
  * two planners racing over a shared module can only lose an entry; neither can
  * read an owner and a plan that belong to different planners.
@@ -26,7 +33,7 @@ internal fun <T> Iterable<T>.frozen(): List<T> = FrozenList(this)
 internal class FrozenInstructions(source: List<Instr>) : AbstractList<Instr>() {
     private val values: Array<Instr> = source.toTypedArray()
 
-    internal var linearHotCodeCache: LinearHotCodeCache? = null
+    internal var linearHotCodeCache: FrozenCodeCache? = null
 
     override val size: Int
         get() = values.size
