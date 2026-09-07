@@ -1,5 +1,0 @@
-modules:
-  - ./wasm-annotations
-  - ./wasm-cli
-  - ./wasm-core
-  - ./wasm-wat
