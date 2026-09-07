@@ -80,6 +80,17 @@ jobs:
       - name: Run end-to-end smoke program
         run: ./gradlew --stacktrace :samples-cli:run
 
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-jvm-test-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            **/build/test-results/**/*.xml
+            **/build/reports/tests/**
+
   targets:
     name: ${{ matrix.name }}
     needs: jvm
@@ -170,3 +181,14 @@ jobs:
           set -euo pipefail
           read -r -a gradle_tasks <<< "$GRADLE_TASKS"
           ./gradlew --stacktrace "${gradle_tasks[@]}"
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-${{ matrix.name }}-test-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            **/build/test-results/**/*.xml
+            **/build/reports/tests/**
