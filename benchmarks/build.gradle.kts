@@ -202,6 +202,7 @@ benchmark {
 
 val gateTool = layout.projectDirectory.file("tools/performance_gate.py")
 val compiledReferenceTool = layout.projectDirectory.file("tools/compiled_reference.py")
+val upstreamLock = layout.projectDirectory.file("upstreams.lock.json")
 val benchmarkTargets = listOf("jvm", "macosArm64", "linuxArm64", "linuxX64")
 val canonicalFixtureDirectory = layout.buildDirectory.dir("compiled-reference/fixtures")
 val fibFixture = canonicalFixtureDirectory.map { it.file("fib.wasm") }
@@ -210,6 +211,7 @@ val jsonFixture = canonicalFixtureDirectory.map { it.file("json.wasm") }
 val jvmMainCompilation = kotlin.targets.getByName("jvm").compilations.getByName("main")
 
 val exportBenchmarkFixtures = tasks.register<JavaExec>("exportBenchmarkFixtures") {
+    val fixtureDirectory = canonicalFixtureDirectory
     group = "benchmark"
     description = "Export the generated canonical Wasm bytes for native runtime references."
     dependsOn(jvmMainCompilation.compileTaskProvider)
@@ -217,7 +219,7 @@ val exportBenchmarkFixtures = tasks.register<JavaExec>("exportBenchmarkFixtures"
     mainClass.set("io.heapy.kwasm.benchmarks.BenchmarkFixtureExporterKt")
     outputs.files(fibFixture, shaFixture, jsonFixture)
     doFirst {
-        setArgs(listOf(canonicalFixtureDirectory.get().asFile.absolutePath))
+        setArgs(listOf(fixtureDirectory.get().asFile.absolutePath))
     }
 }
 
@@ -310,6 +312,9 @@ benchmarkTargets.forEach { target ->
             val coreMarkPath = providers.environmentVariable("KWASM_COREMARK_WASM")
             val runnerPathValue = runnerPath.orNull.orEmpty()
             val coreMarkPathValue = coreMarkPath.orNull.orEmpty()
+            val fibFixtureFile = fibFixture
+            val shaFixtureFile = shaFixture
+            val jsonFixtureFile = jsonFixture
             group = "verification"
             description = "Measure the pinned Wasmtime/Cranelift reference for $target."
             dependsOn(exportBenchmarkFixtures)
@@ -337,9 +342,9 @@ benchmarkTargets.forEach { target ->
                     runnerPathValue,
                     rawWasmtimeReferenceReport.get().asFile.absolutePath,
                     target,
-                    fibFixture.get().asFile.absolutePath,
-                    shaFixture.get().asFile.absolutePath,
-                    jsonFixture.get().asFile.absolutePath,
+                    fibFixtureFile.get().asFile.absolutePath,
+                    shaFixtureFile.get().asFile.absolutePath,
+                    jsonFixtureFile.get().asFile.absolutePath,
                     coreMarkPathValue,
                     "fixed-coremark-100",
                 )
@@ -356,6 +361,11 @@ benchmarkTargets.forEach { target ->
                         "${System.getProperty("os.version")}",
                 )
         val coreMarkPathValue = coreMarkPath.orNull.orEmpty()
+        val compiledReferenceToolPath = compiledReferenceTool.asFile.absolutePath
+        val upstreamLockPath = upstreamLock.asFile.absolutePath
+        val fibFixtureFile = fibFixture
+        val shaFixtureFile = shaFixture
+        val jsonFixtureFile = jsonFixture
         group = "verification"
         description =
             "Create the separate informational kwasm/Wasmtime report for $target."
@@ -363,7 +373,7 @@ benchmarkTargets.forEach { target ->
         inputs.file(normalizedCompiledReferenceReport)
         inputs.file(rawWasmtimeReferenceReport)
         inputs.file(compiledReferenceTool)
-        inputs.file(layout.projectDirectory.file("upstreams.lock.json"))
+        inputs.file(upstreamLock)
         inputs.files(fibFixture, shaFixture, jsonFixture)
         inputs.property("coreMarkPath", coreMarkPathValue)
         inputs.property("machineDescription", machineDescription)
@@ -377,7 +387,7 @@ benchmarkTargets.forEach { target ->
             }
             commandLine(
                 "python3",
-                compiledReferenceTool.asFile.absolutePath,
+                compiledReferenceToolPath,
                 "--kwasm",
                 normalizedCompiledReferenceReport.get().asFile.absolutePath,
                 "--wasmtime",
@@ -387,11 +397,11 @@ benchmarkTargets.forEach { target ->
                 "--target",
                 target,
                 "--fib-wasm",
-                fibFixture.get().asFile.absolutePath,
+                fibFixtureFile.get().asFile.absolutePath,
                 "--sha-wasm",
-                shaFixture.get().asFile.absolutePath,
+                shaFixtureFile.get().asFile.absolutePath,
                 "--json-wasm",
-                jsonFixture.get().asFile.absolutePath,
+                jsonFixtureFile.get().asFile.absolutePath,
                 "--coremark-wasm",
                 coreMarkPathValue,
                 "--machine",
@@ -399,7 +409,7 @@ benchmarkTargets.forEach { target ->
                 "--measurement-command",
                 "./gradlew :benchmarks:${target}CompiledReferenceReport",
                 "--upstream-lock",
-                layout.projectDirectory.file("upstreams.lock.json").asFile.absolutePath,
+                upstreamLockPath,
             )
         }
     }
