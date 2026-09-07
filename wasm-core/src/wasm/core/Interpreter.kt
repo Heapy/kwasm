@@ -17,6 +17,7 @@ private const val PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT: Int = 4
  * are heap data owned by [Store]. Guest calls never recurse on the host stack.
  */
 @ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class Interpreter : ResumableMachine {
     private enum class FastInstructionResult {
         Handled,
@@ -1484,7 +1485,7 @@ public class Interpreter : ResumableMachine {
         val base = rawAddress.toUInt().toULong()
         val address = base + instruction.offset
         if (address < base || address > Long.MAX_VALUE.toULong()) {
-            throw Trap.oobMemory(Long.MAX_VALUE, 1)
+            throw ExecutionTrap.oobMemory(Long.MAX_VALUE, 1)
         }
         val signedAddress = address.toLong()
         return when (instruction.opcode) {
@@ -1958,7 +1959,7 @@ public class Interpreter : ResumableMachine {
                 ),
             )
             Else, End, Nop -> Unit
-            Unreachable -> throw Trap.unreachable()
+            Unreachable -> throw ExecutionTrap.unreachable()
             Return -> finishFunction(store, frame)
             is Br -> {
                 if (branch(store, frame, instruction.depth)) {
@@ -2020,7 +2021,7 @@ public class Interpreter : ResumableMachine {
             }
             is CallRef -> {
                 val reference = stack.removeLast() as Value.Ref.Func
-                if (reference.isNullRef()) throw Trap.nullFunctionReference()
+                if (reference.isNullRef()) throw ExecutionTrap.nullFunctionReference()
                 val target = reference.owner ?: instance
                 checkFunctionType(instance, target, reference.index, instruction.typeIndex)
                 val expected = instance.module.functionTypeByTypeIndex(instruction.typeIndex)
@@ -2029,7 +2030,7 @@ public class Interpreter : ResumableMachine {
             }
             is ReturnCallRef -> {
                 val reference = stack.removeLast() as Value.Ref.Func
-                if (reference.isNullRef()) throw Trap.nullFunctionReference()
+                if (reference.isNullRef()) throw ExecutionTrap.nullFunctionReference()
                 val target = reference.owner ?: instance
                 checkFunctionType(instance, target, reference.index, instruction.typeIndex)
                 val expected = instance.module.functionTypeByTypeIndex(instruction.typeIndex)
@@ -2056,7 +2057,7 @@ public class Interpreter : ResumableMachine {
             }
             RefAsNonNull -> {
                 val value = stack.last()
-                if (value.isNullRef()) throw Trap.nullReference()
+                if (value.isNullRef()) throw ExecutionTrap.nullReference()
             }
             is BrOnNull -> {
                 if (stack.last().isNullRef()) {
@@ -2087,8 +2088,8 @@ public class Interpreter : ResumableMachine {
                 throw GuestThrown(GuestException(tag, arguments, instruction.tagIndex))
             }
             ThrowRef -> {
-                val reference = stack.removeLast() as? Value.Ref.Exn ?: throw Trap.castFailure()
-                throw GuestThrown(reference.value ?: throw Trap.nullReference())
+                val reference = stack.removeLast() as? Value.Ref.Exn ?: throw ExecutionTrap.castFailure()
+                throw GuestThrown(reference.value ?: throw ExecutionTrap.nullReference())
             }
             is Rethrow -> {
                 val targetIndex = frame.controls.lastIndex - instruction.depth
@@ -2605,11 +2606,11 @@ public class Interpreter : ResumableMachine {
         val table = instance.tables[tableIndex]
         val rawIndex = popIndex(stack, table.indexType)
         if (rawIndex >= table.size.toULong()) {
-            throw Trap.undefinedElement(rawIndex.saturatedInt(), table.size)
+            throw ExecutionTrap.undefinedElement(rawIndex.saturatedInt(), table.size)
         }
         val elementIndex = rawIndex.toInt()
         val reference = table.get(elementIndex)
-        if (reference.isNullRef()) throw Trap.indirectNull()
+        if (reference.isNullRef()) throw ExecutionTrap.indirectNull()
         val function = reference as Value.Ref.Func
         val target = function.owner ?: instance
         checkFunctionType(instance, target, function.index, typeIndex)
@@ -2631,7 +2632,7 @@ public class Interpreter : ResumableMachine {
                 actual,
             )
         ) {
-            throw Trap.indirectTypeMismatch(
+            throw ExecutionTrap.indirectTypeMismatch(
                 expectedTypeIndex,
                 targetInstance.module.functionTypeIndex(functionIndex),
             )
@@ -2856,7 +2857,7 @@ public class Interpreter : ResumableMachine {
                 val count = popUnsignedI32(stack)
                 val offset = popUnsignedI32(stack)
                 val data = instance.dataSegments.getOrNull(instruction.secondIndex)?.init
-                    ?: throw Trap.arrayOutOfBounds(instruction.secondIndex, instance.dataSegments.size)
+                    ?: throw ExecutionTrap.arrayOutOfBounds(instruction.secondIndex, instance.dataSegments.size)
                 val values = decodeArrayData(type.field.storage, data, offset, count)
                 stack.addLast(
                     Value.Ref.Gc(ArrayObject(instance, instruction.firstIndex, values.toMutableList())),
@@ -2867,9 +2868,9 @@ public class Interpreter : ResumableMachine {
                 val count = popUnsignedI32(stack)
                 val offset = popUnsignedI32(stack)
                 val segment = instance.elementSegments.getOrNull(instruction.secondIndex)
-                    ?: throw Trap.arrayOutOfBounds(instruction.secondIndex, instance.elementSegments.size)
+                    ?: throw ExecutionTrap.arrayOutOfBounds(instruction.secondIndex, instance.elementSegments.size)
                 if (offset > segment.exprs.size || count > segment.exprs.size - offset) {
-                    throw Trap.arrayOutOfBounds(offset, segment.exprs.size)
+                    throw ExecutionTrap.arrayOutOfBounds(offset, segment.exprs.size)
                 }
                 val evaluator = ConstExprEvaluator(instance)
                 val elementType = when (val mode = segment.mode) {
@@ -2937,7 +2938,7 @@ public class Interpreter : ResumableMachine {
                 val destination = popArray(stack)
                 checkArrayRange(destination, destinationOffset, count)
                 val data = instance.dataSegments.getOrNull(instruction.secondIndex)?.init
-                    ?: throw Trap.arrayOutOfBounds(instruction.secondIndex, instance.dataSegments.size)
+                    ?: throw ExecutionTrap.arrayOutOfBounds(instruction.secondIndex, instance.dataSegments.size)
                 val values = decodeArrayData(type.field.storage, data, sourceOffset, count)
                 values.forEachIndexed { index, value ->
                     destination.elements[destinationOffset + index] = value
@@ -2951,9 +2952,9 @@ public class Interpreter : ResumableMachine {
                 val destination = popArray(stack)
                 checkArrayRange(destination, destinationOffset, count)
                 val segment = instance.elementSegments.getOrNull(instruction.secondIndex)
-                    ?: throw Trap.arrayOutOfBounds(instruction.secondIndex, instance.elementSegments.size)
+                    ?: throw ExecutionTrap.arrayOutOfBounds(instruction.secondIndex, instance.elementSegments.size)
                 if (sourceOffset > segment.exprs.size || count > segment.exprs.size - sourceOffset) {
-                    throw Trap.arrayOutOfBounds(sourceOffset, segment.exprs.size)
+                    throw ExecutionTrap.arrayOutOfBounds(sourceOffset, segment.exprs.size)
                 }
                 val evaluator = ConstExprEvaluator(instance)
                 val elementType = when (val mode = segment.mode) {
@@ -2976,7 +2977,7 @@ public class Interpreter : ResumableMachine {
             22, 23 -> {
                 val value = stack.removeLast() as Value.Ref
                 val target = instruction.targetType!!
-                if (!module.referenceMatches(value, target)) throw Trap.castFailure()
+                if (!module.referenceMatches(value, target)) throw ExecutionTrap.castFailure()
                 stack.addLast(value)
             }
             24, 25 -> {
@@ -3006,7 +3007,7 @@ public class Interpreter : ResumableMachine {
                     when {
                         value.isNullRef() -> Value.NULL_EXTERN
                         value is Value.Ref.AnyExtern -> value.external
-                        else -> throw Trap.castFailure()
+                        else -> throw ExecutionTrap.castFailure()
                     },
                 )
             }
@@ -3032,20 +3033,20 @@ public class Interpreter : ResumableMachine {
             ?: throw ExecutionTrap(TrapKind.UNREACHABLE_PARENT, "type $index is not an array")
 
     private fun popStruct(stack: RuntimeValueStack): StructObject {
-        val reference = stack.removeLast() as? Value.Ref.Gc ?: throw Trap.castFailure()
+        val reference = stack.removeLast() as? Value.Ref.Gc ?: throw ExecutionTrap.castFailure()
         return reference.value as? StructObject ?: if (reference.value == null) {
-            throw Trap.nullReference()
+            throw ExecutionTrap.nullReference()
         } else {
-            throw Trap.castFailure()
+            throw ExecutionTrap.castFailure()
         }
     }
 
     private fun popArray(stack: RuntimeValueStack): ArrayObject {
-        val reference = stack.removeLast() as? Value.Ref.Gc ?: throw Trap.castFailure()
+        val reference = stack.removeLast() as? Value.Ref.Gc ?: throw ExecutionTrap.castFailure()
         return reference.value as? ArrayObject ?: if (reference.value == null) {
-            throw Trap.nullReference()
+            throw ExecutionTrap.nullReference()
         } else {
-            throw Trap.castFailure()
+            throw ExecutionTrap.castFailure()
         }
     }
 
@@ -3053,17 +3054,17 @@ public class Interpreter : ResumableMachine {
 
     private fun popUnsignedI32(stack: RuntimeValueStack): Int {
         val value = stack.removeLastI32().toUInt()
-        if (value > Int.MAX_VALUE.toUInt()) throw Trap.arrayOutOfBounds(Int.MAX_VALUE, 0)
+        if (value > Int.MAX_VALUE.toUInt()) throw ExecutionTrap.arrayOutOfBounds(Int.MAX_VALUE, 0)
         return value.toInt()
     }
 
     private fun checkArrayIndex(array: ArrayObject, index: Int) {
-        if (index !in array.elements.indices) throw Trap.arrayOutOfBounds(index, array.elements.size)
+        if (index !in array.elements.indices) throw ExecutionTrap.arrayOutOfBounds(index, array.elements.size)
     }
 
     private fun checkArrayRange(array: ArrayObject, offset: Int, count: Int) {
         if (offset < 0 || count < 0 || offset > array.elements.size - count) {
-            throw Trap.arrayOutOfBounds(offset, array.elements.size)
+            throw ExecutionTrap.arrayOutOfBounds(offset, array.elements.size)
         }
     }
 
@@ -3093,7 +3094,7 @@ public class Interpreter : ResumableMachine {
             Value.I32(if (signed) bits shl 16 shr 16 else bits)
         }
         is StorageType.Value -> {
-            if (signed || unsigned) throw Trap.castFailure()
+            if (signed || unsigned) throw ExecutionTrap.castFailure()
             value
         }
     }
@@ -3110,7 +3111,7 @@ public class Interpreter : ResumableMachine {
             is StorageType.Value -> when (storage.type) {
                 ValType.I32, ValType.F32 -> 4
                 ValType.I64, ValType.F64 -> 8
-                else -> throw Trap.castFailure()
+                else -> throw ExecutionTrap.castFailure()
             }
         }
         val byteCount = count.toLong() * width.toLong()
@@ -3119,7 +3120,7 @@ public class Interpreter : ResumableMachine {
             offset < 0 ||
             offset > bytes.size - byteCount.toInt()
         ) {
-            throw Trap.arrayOutOfBounds(offset, bytes.size)
+            throw ExecutionTrap.arrayOutOfBounds(offset, bytes.size)
         }
         return List(count) { index ->
             val position = offset + index * width
@@ -3134,7 +3135,7 @@ public class Interpreter : ResumableMachine {
                     ValType.I64 -> Value.I64(readLittleI64(bytes, position))
                     ValType.F32 -> Value.F32(Float.fromBits(readLittleI32(bytes, position)))
                     ValType.F64 -> Value.F64(Double.fromBits(readLittleI64(bytes, position)))
-                    else -> throw Trap.castFailure()
+                    else -> throw ExecutionTrap.castFailure()
                 }
             }
         }
@@ -3174,7 +3175,7 @@ public class Interpreter : ResumableMachine {
                 val table = instance.tables[ins.index]
                 val index = popIndex(stack, table.indexType)
                 if (index >= table.size.toULong()) {
-                    throw Trap.oobTable(index.saturatedInt(), table.size)
+                    throw ExecutionTrap.oobTable(index.saturatedInt(), table.size)
                 }
                 stack.addLast(table.get(index.toInt()))
             }
@@ -3183,7 +3184,7 @@ public class Interpreter : ResumableMachine {
                 val table = instance.tables[ins.index]
                 val index = popIndex(stack, table.indexType)
                 if (index >= table.size.toULong()) {
-                    throw Trap.oobTable(index.saturatedInt(), table.size)
+                    throw ExecutionTrap.oobTable(index.saturatedInt(), table.size)
                 }
                 table.set(index.toInt(), v)
             }
@@ -3235,7 +3236,7 @@ public class Interpreter : ResumableMachine {
                 tableFill(instance, ins.index, destination, value, count)
             }
             0xFB -> Unit // GC op skipped
-            else -> throw Trap(TrapKind.UNREACHABLE, "unknown FcIndex opcode 0x${ins.opcode.toString(16)}")
+            else -> throw ExecutionTrap(TrapKind.UNREACHABLE, "unknown FcIndex opcode 0x${ins.opcode.toString(16)}")
         }
     }
 
@@ -3249,7 +3250,7 @@ public class Interpreter : ResumableMachine {
     ) {
         val table = instance.tables[tableIdx]
         val seg = instance.elementSegments.getOrNull(segIdx)
-            ?: throw Trap(TrapKind.UNDEFINED_ELEMENT, "unknown element segment $segIdx")
+            ?: throw ExecutionTrap(TrapKind.UNDEFINED_ELEMENT, "unknown element segment $segIdx")
         val evaluator = ConstExprEvaluator(instance)
         if (
             source > seg.exprs.size.toULong() ||
@@ -3257,7 +3258,7 @@ public class Interpreter : ResumableMachine {
             destination > table.size.toULong() ||
             count > table.size.toULong() - destination
         ) {
-            throw Trap.oobTable(destination.saturatedInt(), table.size)
+            throw ExecutionTrap.oobTable(destination.saturatedInt(), table.size)
         }
         val d = destination.toInt()
         val s = source.toInt()
@@ -3291,7 +3292,7 @@ public class Interpreter : ResumableMachine {
             destination > dst.size.toULong() ||
             count > dst.size.toULong() - destination
         ) {
-            throw Trap.oobTable(destination.saturatedInt(), dst.size)
+            throw ExecutionTrap.oobTable(destination.saturatedInt(), dst.size)
         }
         val d = destination.toInt()
         val s = source.toInt()
@@ -3315,7 +3316,7 @@ public class Interpreter : ResumableMachine {
             destination > table.size.toULong() ||
             count > table.size.toULong() - destination
         ) {
-            throw Trap.oobTable(destination.saturatedInt(), table.size)
+            throw ExecutionTrap.oobTable(destination.saturatedInt(), table.size)
         }
         val d = destination.toInt()
         repeat(count.toInt()) { table.set(d + it, value) }
@@ -3337,13 +3338,13 @@ public class Interpreter : ResumableMachine {
             source > src.byteSize.toULong() ||
             count > src.byteSize.toULong() - source
         ) {
-            throw Trap.oobMemory(source.saturatedLong(), count.saturatedInt())
+            throw ExecutionTrap.oobMemory(source.saturatedLong(), count.saturatedInt())
         }
         if (
             destination > dst.byteSize.toULong() ||
             count > dst.byteSize.toULong() - destination
         ) {
-            throw Trap.oobMemory(destination.saturatedLong(), count.saturatedInt())
+            throw ExecutionTrap.oobMemory(destination.saturatedLong(), count.saturatedInt())
         }
         val n = count.toInt()
         val s = source.toInt()
@@ -3361,7 +3362,7 @@ public class Interpreter : ResumableMachine {
             destination > mem.byteSize.toULong() ||
             count > mem.byteSize.toULong() - destination
         ) {
-            throw Trap.oobMemory(destination.saturatedLong(), count.saturatedInt())
+            throw ExecutionTrap.oobMemory(destination.saturatedLong(), count.saturatedInt())
         }
         val d = destination.toInt()
         val n = count.toInt()
@@ -3373,7 +3374,7 @@ public class Interpreter : ResumableMachine {
         val count = stack.removeLastI32().toUInt().toULong()
         val source = stack.removeLastI32().toUInt().toULong()
         val seg = instance.dataSegments.getOrNull(ins.dataSegment)
-            ?: throw Trap(TrapKind.UNDEFINED_ELEMENT, "unknown data segment ${ins.dataSegment}")
+            ?: throw ExecutionTrap(TrapKind.UNDEFINED_ELEMENT, "unknown data segment ${ins.dataSegment}")
         val mem = instance.memories[ins.memIndex]
         val destination = popIndex(stack, mem.indexType)
         if (
@@ -3382,7 +3383,7 @@ public class Interpreter : ResumableMachine {
             destination > mem.byteSize.toULong() ||
             count > mem.byteSize.toULong() - destination
         ) {
-            throw Trap.oobMemory(destination.saturatedLong(), count.saturatedInt())
+            throw ExecutionTrap.oobMemory(destination.saturatedLong(), count.saturatedInt())
         }
         val n = count.toInt()
         val s = source.toInt()
@@ -3410,7 +3411,7 @@ public class Interpreter : ResumableMachine {
             0x33 -> { mem.checkRange(base, 2); stack.addLastI64(loadI16Unsigned(mem, base).toLong()) }
             0x34 -> { mem.checkRange(base, 4); stack.addLastI64(loadI32(mem, base).toLong()) } // i64.load32_s
             0x35 -> { mem.checkRange(base, 4); stack.addLastI64(loadI32(mem, base).toLong() and 0xFFFFFFFFL) }
-            else -> throw Trap(TrapKind.UNREACHABLE, "unsupported load opcode 0x${ins.opcode.toString(16)}")
+            else -> throw ExecutionTrap(TrapKind.UNREACHABLE, "unsupported load opcode 0x${ins.opcode.toString(16)}")
         }
     }
 
@@ -3428,7 +3429,7 @@ public class Interpreter : ResumableMachine {
             0x3C -> { mem.checkRange(base, 1); mem.data()[base.toInt()] = bits.toByte() }
             0x3D -> { mem.checkRange(base, 2); storeI16(mem, base, bits.toInt()) }
             0x3E -> { mem.checkRange(base, 4); storeI32(mem, base, bits.toInt()) }
-            else -> throw Trap(TrapKind.UNREACHABLE, "unsupported store opcode 0x${ins.opcode.toString(16)}")
+            else -> throw ExecutionTrap(TrapKind.UNREACHABLE, "unsupported store opcode 0x${ins.opcode.toString(16)}")
         }
     }
 
@@ -3548,7 +3549,7 @@ public class Interpreter : ResumableMachine {
         }
         val effective = address + offset
         if (effective < address || effective > Long.MAX_VALUE.toULong()) {
-            throw Trap.oobMemory(Long.MAX_VALUE, 1)
+            throw ExecutionTrap.oobMemory(Long.MAX_VALUE, 1)
         }
         return effective.toLong()
     }
@@ -3705,7 +3706,7 @@ public class Interpreter : ResumableMachine {
             0xC2 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 56) shr 56) }          // i64.extend8_s
             0xC3 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 48) shr 48) }          // i64.extend16_s
             0xC4 -> { val a = stack.removeLastI64(); stack.addLastI64((a shl 32) shr 32) }          // i64.extend32_s
-            else -> throw Trap(TrapKind.UNREACHABLE, "unsupported opcode 0x${opcode.toString(16)}")
+            else -> throw ExecutionTrap(TrapKind.UNREACHABLE, "unsupported opcode 0x${opcode.toString(16)}")
         }
     }
 }

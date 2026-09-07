@@ -11,10 +11,8 @@ import io.heapy.kwasm.HostImport
 import io.heapy.kwasm.ImportDesc
 import io.heapy.kwasm.IndexType
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Interpreter
 import io.heapy.kwasm.Limits
 import io.heapy.kwasm.LinkException
-import io.heapy.kwasm.Machine
 import io.heapy.kwasm.MemoryInstance
 import io.heapy.kwasm.MemoryType
 import io.heapy.kwasm.Module
@@ -56,7 +54,7 @@ public class TckModuleRegistry {
     public var currentInstance: Instance? = null
         private set
 
-    public fun installInstance(name: String?, instance: Instance, machine: Machine = Interpreter()) {
+    public fun installInstance(name: String?, instance: Instance) {
         currentInstance = instance
         if (name != null) namedInstances[name] = instance
         // Named modules are action targets, not import namespaces until a register command.
@@ -67,9 +65,9 @@ public class TckModuleRegistry {
         registered[alias] = module
     }
 
-    public fun register(alias: String, moduleName: String?, machine: Machine = Interpreter()) {
+    public fun register(alias: String, moduleName: String?) {
         val instance = resolveActionInstance(moduleName)
-        registered[alias] = instance.asRegisteredModule(machine)
+        registered[alias] = instance.asRegisteredModule()
     }
 
     public fun resolveImportModule(alias: String): TckRegisteredModule? = registered[alias]
@@ -90,7 +88,7 @@ public class TckModuleRegistry {
 }
 
 /** Resolves module imports by the registered module and export names in a script. */
-public class TckLinker(private val machine: Machine = Interpreter()) {
+public class TckLinker {
     public fun instantiate(
         module: Module,
         registry: TckModuleRegistry,
@@ -159,14 +157,14 @@ public class TckLinker(private val machine: Machine = Interpreter()) {
         throw LinkException("import is not a $expected", module, name)
 }
 
-private fun Instance.asRegisteredModule(machine: Machine): TckRegisteredModule {
+private fun Instance.asRegisteredModule(): TckRegisteredModule {
     val external = exportsByName.mapValues { (_, export) ->
         when (val description = export.desc) {
             is ExportDesc.Function -> TckExtern.Function(
                 type = functionType(description.index),
                 guestAddress = GuestFunctionAddress(this, description.index),
             ) { arguments ->
-                machine.invoke(this, description.index, arguments)
+                store.machine.invoke(this, description.index, arguments)
             }
             is ExportDesc.Memory -> TckExtern.Memory(memories[description.index])
             is ExportDesc.Table -> TckExtern.Table(tables[description.index])

@@ -49,6 +49,8 @@ public fun interface InstructionCostTable {
 @io.heapy.kwasm.ExperimentalKwasmApi
 public enum class CheckpointMode {
     Enabled,
+
+    @io.heapy.kwasm.InternalKwasmApi
     CompiledOutEquivalent,
 }
 
@@ -263,6 +265,12 @@ public data class PendingImport(
 public class Store(
     public val config: StoreConfig = StoreConfig(),
     parentContext: CoroutineContext = EmptyCoroutineContext,
+    /**
+     * Execution engine for every guest call made against this store. Owning it
+     * here keeps the engine and the state it mutates on one object instead of
+     * letting each call site pick its own.
+     */
+    public val machine: ResumableMachine = Interpreter(),
 ) {
     /** Lifetime job for executions launched through [scope]. */
     public val job: Job = SupervisorJob(parentContext[Job])
@@ -447,6 +455,7 @@ public class Store(
      * The runtime state must already have passed [captureSnapshotState], which
      * establishes that the store is at a defined suspension point.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun captureHostSnapshotState(
         hooks: HostSnapshotHooks?,
     ): List<RuntimeHostSnapshot> =
@@ -459,6 +468,7 @@ public class Store(
      * Instance-scoped participants receive this ownership context; legacy
      * store-scoped participants continue to use their context-free callback.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun captureHostSnapshotState(
         instance: Instance,
         hooks: HostSnapshotHooks?,
@@ -502,6 +512,7 @@ public class Store(
      * Resolve and validate all decoded host state before any live state is
      * mutated. The returned commit is invoked only after runtime restoration.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun prepareHostSnapshotRestore(
         snapshots: List<RuntimeHostSnapshot>,
         hooks: HostSnapshotHooks?,
@@ -515,6 +526,7 @@ public class Store(
     /**
      * Prepare registered host state for the exact restored [instance].
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun prepareHostSnapshotRestore(
         snapshots: List<RuntimeHostSnapshot>,
         instance: Instance,
@@ -1039,6 +1051,7 @@ public class Store(
      * The state is coherent only at one of the defined suspension points, so
      * calls made while the guest is running or idle are rejected.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun captureSnapshotState(instance: Instance): RuntimeStoreSnapshot =
         captureSnapshotState(instance) { it }
 
@@ -1056,6 +1069,7 @@ public class Store(
      * [awaitSnapshotCapturable] first instead of capturing on the status
      * observation alone.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun <T> captureSnapshotState(
         instance: Instance,
         capture: (RuntimeStoreSnapshot) -> T,
@@ -1151,6 +1165,7 @@ public class Store(
      * Validation precedes every mutation so a rejected hostile snapshot leaves
      * the target instance and store unchanged.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun restoreSnapshotState(instance: Instance, snapshot: RuntimeStoreSnapshot) {
         validateSnapshotForRestore(instance, snapshot)
         installRuntimeSnapshot(instance, snapshot)
@@ -1166,6 +1181,7 @@ public class Store(
      * contract poisons the Store instead of leaving it executable with a
      * partially restored host environment.
      */
+    @io.heapy.kwasm.InternalKwasmApi
     public fun restoreSnapshotState(
         instance: Instance,
         snapshot: RuntimeStoreSnapshot,

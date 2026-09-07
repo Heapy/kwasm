@@ -1,7 +1,8 @@
 package io.heapy.kwasm.tck
 
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Machine
+import io.heapy.kwasm.ResumableMachine
+import io.heapy.kwasm.Store
 import io.heapy.kwasm.Value
 import io.heapy.kwasm.wat.WatComposer
 import kotlinx.coroutines.CancellationException
@@ -172,12 +173,14 @@ class WasiTestsuiteTest {
     @Test
     fun runnerNeverConvertsCoroutineCancellationIntoAReportedFailure() = runBlocking {
         val cancellation = CancellationException("cancelled by test")
-        val cancellingMachine = object : Machine {
+        val cancellingMachine = object : ResumableMachine {
             override suspend fun invoke(
                 instance: Instance,
                 functionIndex: Int,
                 arguments: List<Value>,
             ): List<Value> = throw cancellation
+
+            override suspend fun resume(instance: Instance): List<Value> = throw cancellation
         }
         val testCase = WasiTestsuiteCase(
             id = "fixtures/cancelled.wasm",
@@ -192,7 +195,9 @@ class WasiTestsuiteTest {
         )
 
         val thrown = assertFailsWith<CancellationException> {
-            WasiTestsuiteRunner(machine = cancellingMachine).run(testCase)
+            WasiTestsuiteRunner(
+                storeFactory = { Store(machine = cancellingMachine) },
+            ).run(testCase)
         }
         assertEquals(cancellation, thrown)
     }

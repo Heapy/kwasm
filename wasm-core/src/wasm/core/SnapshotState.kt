@@ -89,6 +89,7 @@ public fun interface HostSnapshotRestore {
 
 /** Immutable opaque host-participant state carried by `:snapshot`. */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeHostSnapshot(
     public val participantId: String,
     payload: ByteArray,
@@ -107,6 +108,7 @@ public class RuntimeHostSnapshot(
  * boundary so callers cannot mutate a suspended store through a snapshot view.
  */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeMemorySnapshot(bytes: ByteArray) {
     private val contents: ByteArray = bytes.copyOf()
 
@@ -115,6 +117,7 @@ public class RuntimeMemorySnapshot(bytes: ByteArray) {
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeTableSnapshot(values: List<Value.Ref>) {
     private val elements: List<Value.Ref> = values.map { copySnapshotValue(it) as Value.Ref }
 
@@ -123,6 +126,7 @@ public class RuntimeTableSnapshot(values: List<Value.Ref>) {
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeInstanceSnapshot(
     memories: List<RuntimeMemorySnapshot>,
     tables: List<RuntimeTableSnapshot>,
@@ -144,6 +148,7 @@ public class RuntimeInstanceSnapshot(
 
 /** A stable route from a function body to one nested structured-control body. */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public data class RuntimeBodyStep(
     public val instructionIndex: Int,
     public val branch: RuntimeBodyBranch,
@@ -151,6 +156,7 @@ public data class RuntimeBodyStep(
 )
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public enum class RuntimeBodyBranch {
     Body,
     Then,
@@ -160,6 +166,7 @@ public enum class RuntimeBodyBranch {
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public enum class RuntimeControlKind {
     Function,
     Block,
@@ -170,6 +177,7 @@ public enum class RuntimeControlKind {
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeControlSnapshot(
     public val kind: RuntimeControlKind,
     bodyPath: List<RuntimeBodyStep>,
@@ -185,6 +193,7 @@ public class RuntimeControlSnapshot(
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeFrameSnapshot(
     public val functionIndex: Int,
     locals: List<Value>,
@@ -209,6 +218,7 @@ public class RuntimeFrameSnapshot(
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimePendingImportSnapshot(
     public val functionIndex: Int,
     arguments: List<Value>,
@@ -218,6 +228,7 @@ public class RuntimePendingImportSnapshot(
 }
 
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class RuntimeStoreSnapshot(
     public val instance: RuntimeInstanceSnapshot,
     valueStack: List<Value>,

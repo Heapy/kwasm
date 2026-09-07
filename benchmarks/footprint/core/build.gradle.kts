@@ -7,6 +7,7 @@ plugins {
 kotlin {
     compilerOptions {
         optIn.add("io.heapy.kwasm.ExperimentalKwasmApi")
+        optIn.add("io.heapy.kwasm.InternalKwasmApi")
     }
 
     iosArm64 {

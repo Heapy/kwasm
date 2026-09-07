@@ -8,6 +8,7 @@ package io.heapy.kwasm
  * [args] holds struct/copy immediates for memory.copy/table.copy etc.
  */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public sealed class Instr {
     public abstract val opcode: Int
 

@@ -30,8 +30,8 @@ public class Instance(
         (imports.memories + module.memories.map { MemoryInstance(it.type) })
     public val tables: List<TableInstance> =
         (imports.tables + module.tables.map { TableInstance(it.type, module) })
-    public val globals: MutableList<GlobalInstance> =
-        (imports.globals + module.globals.map { GlobalInstance(it.type, module) }).toMutableList()
+    public val globals: List<GlobalInstance> =
+        imports.globals + module.globals.map { GlobalInstance(it.type, module) }
     public val tags: List<TagInstance> =
         imports.tags + module.tags.map {
             TagInstance(module.functionTypeByTypeIndex(it.typeIndex), module)
@@ -217,7 +217,7 @@ public class Instance(
                     val elementCount = seg.exprs.size.toULong()
                     if (elementCount > tableSize || offset > tableSize - elementCount) {
                         val firstInvalid = if (offset >= tableSize) offset else tableSize
-                        throw Trap.oobTable(
+                        throw ExecutionTrap.oobTable(
                             if (firstInvalid > Int.MAX_VALUE.toULong()) {
                                 Int.MAX_VALUE
                             } else {
@@ -268,7 +268,7 @@ public class Instance(
                         seg.init.size > mem.byteSize ||
                         address > (mem.byteSize - seg.init.size).toULong()
                     ) {
-                        throw Trap.oobMemory(
+                        throw ExecutionTrap.oobMemory(
                             if (address > Long.MAX_VALUE.toULong()) Long.MAX_VALUE else address.toLong(),
                             seg.init.size,
                         )
@@ -284,9 +284,9 @@ public class Instance(
     }
 
     /** Run the start function if present. */
-    public suspend fun runStart(machine: Machine = Interpreter()) {
+    public suspend fun runStart() {
         val s = module.startFunction ?: return
-        machine.invoke(this, s, emptyList())
+        store.machine.invoke(this, s, emptyList())
     }
 
     public fun functionType(absIndex: Int): FuncType {
@@ -357,18 +357,16 @@ public class Instance(
     public suspend fun invoke(
         exportName: String,
         arguments: List<Value> = emptyList(),
-        machine: Machine = Interpreter(),
     ): List<Value> {
         val export = exportsByName[exportName]
             ?: throw LinkException("unknown export '$exportName'")
         val function = export.desc as? ExportDesc.Function
             ?: throw LinkException("export '$exportName' is not a function")
-        return machine.invoke(this, function.index, arguments)
+        return store.machine.invoke(this, function.index, arguments)
     }
 
     /** Continue the heap frames installed by snapshot restoration. */
-    public suspend fun resume(machine: ResumableMachine = Interpreter()): List<Value> =
-        machine.resume(this)
+    public suspend fun resume(): List<Value> = store.machine.resume(this)
 
     internal fun captureRuntimeSnapshot(): RuntimeInstanceSnapshot =
         RuntimeInstanceSnapshot(
@@ -656,7 +654,7 @@ public class ResolvedImports(
 
 /**
  * Host-provided function callable from WebAssembly. The host may trap by
- * throwing [Trap].
+ * throwing [ExecutionTrap].
  *
  * Host code inherits the runtime's snapshot execution gate. Replacing the
  * coroutine [kotlin.coroutines.ContinuationInterceptor] (for example with

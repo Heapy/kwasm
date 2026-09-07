@@ -68,46 +68,46 @@ private fun Value.matchesReference(
 // ---- integer division / remainder (with trap checks) ----
 
 internal fun idiv(a: Int, b: Int): Int {
-    if (b == 0) throw Trap.divByZero()
-    if (a == Int.MIN_VALUE && b == -1) throw Trap.intOverflow()
+    if (b == 0) throw ExecutionTrap.divByZero()
+    if (a == Int.MIN_VALUE && b == -1) throw ExecutionTrap.intOverflow()
     return a / b
 }
 
 internal fun udiv(a: Int, b: Int): Int {
-    if (b == 0) throw Trap.divByZero()
+    if (b == 0) throw ExecutionTrap.divByZero()
     return (a.toUInt() / b.toUInt()).toInt()
 }
 
 internal fun irem(a: Int, b: Int): Int {
-    if (b == 0) throw Trap.divByZero()
+    if (b == 0) throw ExecutionTrap.divByZero()
     if (a == Int.MIN_VALUE && b == -1) return 0
     return a % b
 }
 
 internal fun urem(a: Int, b: Int): Int {
-    if (b == 0) throw Trap.divByZero()
+    if (b == 0) throw ExecutionTrap.divByZero()
     return (a.toUInt() % b.toUInt()).toInt()
 }
 
 internal fun ldiv(a: Long, b: Long): Long {
-    if (b == 0L) throw Trap.divByZero()
-    if (a == Long.MIN_VALUE && b == -1L) throw Trap.intOverflow()
+    if (b == 0L) throw ExecutionTrap.divByZero()
+    if (a == Long.MIN_VALUE && b == -1L) throw ExecutionTrap.intOverflow()
     return a / b
 }
 
 internal fun udiv64(a: Long, b: Long): Long {
-    if (b == 0L) throw Trap.divByZero()
+    if (b == 0L) throw ExecutionTrap.divByZero()
     return (a.toULong() / b.toULong()).toLong()
 }
 
 internal fun lrem(a: Long, b: Long): Long {
-    if (b == 0L) throw Trap.divByZero()
+    if (b == 0L) throw ExecutionTrap.divByZero()
     if (a == Long.MIN_VALUE && b == -1L) return 0L
     return a % b
 }
 
 internal fun lurem(a: Long, b: Long): Long {
-    if (b == 0L) throw Trap.divByZero()
+    if (b == 0L) throw ExecutionTrap.divByZero()
     return (a.toULong() % b.toULong()).toLong()
 }
 
@@ -253,53 +253,53 @@ internal fun fmax(a: Double, b: Double): Double {
 // ---- float-to-int truncation with trapping ----
 
 internal fun truncF32ToI32S(a: Float): Int {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a >= -2147483648f && a < 2147483648f) return a.toInt()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF32ToI32U(a: Float): Int {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     // Truncation happens before the integer-domain check, so values in
     // (-1, 0) are valid and produce zero.
     if (a > -1f && a < TWO_POW_32_F) return a.toLong().toInt()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF32ToI64S(a: Float): Long {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a >= -TWO_POW_63_F && a < TWO_POW_63_F) return a.toLong()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF32ToI64U(a: Float): Long {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a > -1f && a < TWO_POW_64_F) return unsignedFloatToLongBits(a.toDouble())
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF64ToI32S(a: Double): Int {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a > -2147483649.0 && a < 2147483648.0) return a.toInt()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF64ToI32U(a: Double): Int {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a > -1.0 && a < TWO_POW_32) return a.toLong().toInt()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF64ToI64S(a: Double): Long {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a >= -9.2233720368547758e18 && a < 9.2233720368547758e18) return a.toLong()
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 internal fun truncF64ToI64U(a: Double): Long {
-    if (a.isNaN()) throw Trap.invalidConversion()
+    if (a.isNaN()) throw ExecutionTrap.invalidConversion()
     if (a > -1.0 && a < TWO_POW_64) return unsignedFloatToLongBits(a)
-    throw Trap.intOverflow()
+    throw ExecutionTrap.intOverflow()
 }
 
 /**

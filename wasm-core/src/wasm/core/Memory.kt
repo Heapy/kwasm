@@ -58,7 +58,7 @@ public class MemoryInstance(initial: MemoryType) {
 
     public fun checkRange(addr: Long, len: Int) {
         if (len < 0 || addr < 0 || addr > bytes.size.toLong() - len.toLong()) {
-            throw Trap.oobMemory(addr, len)
+            throw ExecutionTrap.oobMemory(addr, len)
         }
     }
 
@@ -148,12 +148,12 @@ public class TableInstance(
     }
 
     public fun get(i: Int): Value.Ref {
-        if (i < 0 || i >= size) throw Trap.oobTable(i, size)
+        if (i < 0 || i >= size) throw ExecutionTrap.oobTable(i, size)
         return entries[i]
     }
 
     public fun set(i: Int, v: Value.Ref) {
-        if (i < 0 || i >= size) throw Trap.oobTable(i, size)
+        if (i < 0 || i >= size) throw ExecutionTrap.oobTable(i, size)
         requireReferenceType(v)
         entries[i] = v
     }

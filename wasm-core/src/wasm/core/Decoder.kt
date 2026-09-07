@@ -11,6 +11,7 @@ import io.heapy.kwasm.Instr.*
  * syntax-complete parsing of deferred SIMD/threads instructions.
  */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class ModuleDecoder(
     private val reader: ByteReader,
     private val validationLimits: ModuleValidationLimits = ModuleValidationLimits(),

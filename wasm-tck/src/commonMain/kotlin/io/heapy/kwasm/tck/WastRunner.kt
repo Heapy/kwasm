@@ -4,9 +4,7 @@ import io.heapy.kwasm.ExportDesc
 import io.heapy.kwasm.FuncType
 import io.heapy.kwasm.HeapType
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Interpreter
 import io.heapy.kwasm.LinkException
-import io.heapy.kwasm.Machine
 import io.heapy.kwasm.Module
 import io.heapy.kwasm.RefType
 import io.heapy.kwasm.Store
@@ -73,8 +71,7 @@ public class WastRunner(
     private val assets: TckAssetLoader,
     private val exclusions: TckExclusions = TckExclusions.Empty,
     private val registry: TckModuleRegistry = TckModuleRegistry.withSpectest(),
-    private val machine: Machine = Interpreter(),
-    private val linker: TckLinker = TckLinker(machine),
+    private val linker: TckLinker = TckLinker(),
     private val storeFactory: () -> Store = ::Store,
     private val failFast: Boolean = false,
 ) {
@@ -120,10 +117,10 @@ public class WastRunner(
             is WastCommand.Module -> {
                 val module = decode(command.filename)
                 val instance = linker.instantiate(module, registry, store)
-                registry.installInstance(command.name, instance, machine)
-                instance.runStart(machine)
+                registry.installInstance(command.name, instance)
+                instance.runStart()
             }
-            is WastCommand.Register -> registry.register(command.alias, command.name, machine)
+            is WastCommand.Register -> registry.register(command.alias, command.name)
             is WastCommand.Action -> executeAction(command.action)
             is WastCommand.AssertReturn -> {
                 val actual = executeAction(command.action)
@@ -177,7 +174,7 @@ public class WastRunner(
                 val module = decode(command.filename)
                 val failure = captureFailure {
                     val instance = linker.instantiate(module, registry, store)
-                    instance.runStart(machine)
+                    instance.runStart()
                 }
                 if (failure !is WasmTrap && failure !is WasmInstantiationException) {
                     throw TckAssertionFailure("expected uninstantiable module, got ${failure.describe()}")
@@ -200,7 +197,7 @@ public class WastRunner(
                 val arguments = action.arguments.mapIndexed { index, value ->
                     value.toRuntimeValue(type.params.getOrNull(index), instance.module)
                 }
-                instance.invoke(action.field, arguments, machine)
+                instance.invoke(action.field, arguments)
             }
             is WastAction.Get -> {
                 val export = instance.export(action.field)

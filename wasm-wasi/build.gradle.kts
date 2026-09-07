@@ -12,6 +12,7 @@ kotlin {
     jvmToolchain(17)
     compilerOptions {
         optIn.add("io.heapy.kwasm.ExperimentalKwasmApi")
+        optIn.add("io.heapy.kwasm.InternalKwasmApi")
     }
     android {
         namespace = "io.heapy.kwasm.wasi"

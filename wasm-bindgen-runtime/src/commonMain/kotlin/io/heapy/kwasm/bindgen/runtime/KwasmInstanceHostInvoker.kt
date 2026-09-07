@@ -3,8 +3,6 @@ package io.heapy.kwasm.bindgen.runtime
 import io.heapy.kwasm.ExportedFunction
 import io.heapy.kwasm.IndexType
 import io.heapy.kwasm.Instance
-import io.heapy.kwasm.Interpreter
-import io.heapy.kwasm.Machine
 import io.heapy.kwasm.MemoryInstance
 import io.heapy.kwasm.ValType
 import io.heapy.kwasm.Value
@@ -92,7 +90,6 @@ public fun interface WasmBlockingBridge {
 public class KwasmInstanceHostInvoker(
     private val instance: Instance,
     private val blockingBridge: WasmBlockingBridge,
-    private val machine: Machine = Interpreter(),
     private val limits: KwasmBindgenRuntimeLimits = KwasmBindgenRuntimeLimits(),
 ) : WasmHostInvoker {
     private val memory: MemoryInstance = requireMemory()
@@ -270,7 +267,6 @@ public class KwasmInstanceHostInvoker(
     private suspend fun release(region: GuestRegion) {
         val results = freeFunction.invoke(
             arguments = listOf(Value.I32(region.pointer), Value.I32(region.length)),
-            machine = machine,
         )
         if (results.isNotEmpty()) {
             throw KwasmBindgenContractException(
@@ -285,7 +281,7 @@ public class KwasmInstanceHostInvoker(
         arguments: List<Value>,
         contractElement: String,
     ): Int {
-        val results = function.invoke(arguments, machine)
+        val results = function.invoke(arguments)
         val result = results.singleOrNull() as? Value.I32
             ?: throw KwasmBindgenContractException(
                 contractElement,
@@ -305,7 +301,7 @@ public class KwasmInstanceHostInvoker(
         arguments: List<Value>,
         contractElement: String,
     ): Long {
-        val results = function.invoke(arguments, machine)
+        val results = function.invoke(arguments)
         return (results.singleOrNull() as? Value.I64)?.v
             ?: throw KwasmBindgenContractException(
                 contractElement,

@@ -46,7 +46,7 @@ The implementation contract and requirement IDs live in
 
 | Gradle project | Purpose |
 |---|---|
-| `:annotations` | Shared pre-1.0 API opt-in marker |
+| `:annotations` | Shared pre-1.0 and internal API opt-in markers |
 | `:core` | Bounded binary decoder, validator, runtime state, and suspendable interpreter |
 | `:snapshot` | Versioned snapshot encode/inspect/restore and host-state hooks |
 | `:wasi` | Coroutine-friendly WASI Preview 1 host module plus in-memory and confined host filesystems |
@@ -84,6 +84,15 @@ suspend fun runGuest(wasmBytes: ByteArray) {
 
 The marker lives in the lightweight `kwasm-annotations` artifact and is
 exported transitively by the public kwasm modules.
+
+A second marker, `@InternalKwasmApi`, covers declarations that are public only
+because another kwasm module needs them: the binary reader and decoder, the
+constant-expression evaluator, the instruction AST, the interpreter, the
+`Runtime*Snapshot` state view, and `CheckpointMode.CompiledOutEquivalent`.
+These carry no compatibility guarantee
+at all, so the marker is error-level rather than warning-level. Reach for a
+supported entry point instead: `Module.decode`, `Instance.invoke`,
+`Instance.resume`, `Store.fuel`, and the `:snapshot` module's codec.
 
 ## Supported targets
 

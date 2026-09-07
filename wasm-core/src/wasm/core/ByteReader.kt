@@ -5,9 +5,10 @@ package io.heapy.kwasm
  *
  * The WebAssembly binary format is little-endian and uses LEB128 for all
  * variable-length integers. This reader tracks a position and bounds-checks
- * every read, throwing [DecodeException] on malformed input.
+ * every read, throwing [WasmDecodeException] on malformed input.
  */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class ByteReader(
     data: ByteArray,
     public val baseOffset: Int = 0,

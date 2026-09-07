@@ -70,7 +70,6 @@ public class Linker {
     public fun defineInstance(
         module: String,
         instance: Instance,
-        machine: Machine = Interpreter(),
     ): Linker = apply {
         instance.module.exports.forEach { export ->
             val value = when (val desc = export.desc) {
@@ -80,7 +79,7 @@ public class Linker {
                         guestAddress = GuestFunctionAddress(instance, desc.index),
                         typeContext = instance.functionTypeContext(desc.index),
                         fn = HostFunction { arguments ->
-                            machine.invoke(instance, desc.index, arguments)
+                            instance.store.machine.invoke(instance, desc.index, arguments)
                         },
                     ),
                 )
@@ -244,6 +243,5 @@ public class ExportedFunction internal constructor(
 ) {
     public suspend fun invoke(
         arguments: List<Value> = emptyList(),
-        machine: Machine = Interpreter(),
-    ): List<Value> = machine.invoke(instance, functionIndex, arguments)
+    ): List<Value> = instance.store.machine.invoke(instance, functionIndex, arguments)
 }

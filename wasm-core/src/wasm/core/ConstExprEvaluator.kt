@@ -10,6 +10,7 @@ import io.heapy.kwasm.Instr.*
  * conversions classified as constant by the core specification.
  */
 @io.heapy.kwasm.ExperimentalKwasmApi
+@io.heapy.kwasm.InternalKwasmApi
 public class ConstExprEvaluator(private val instance: Instance) {
 
     public fun eval(expr: List<Instr>, expected: ValType): Value {
@@ -154,7 +155,7 @@ public class ConstExprEvaluator(private val instance: Instance) {
                     when {
                         value.isNullRef() -> Value.NULL_EXTERN
                         value is Value.Ref.AnyExtern -> value.external
-                        else -> throw Trap.castFailure()
+                        else -> throw ExecutionTrap.castFailure()
                     },
                 )
             }
@@ -190,7 +191,7 @@ public class ConstExprEvaluator(private val instance: Instance) {
     private fun ArrayDeque<Value>.removeLastAllocationLength(): Int {
         val length = removeLastI32().toUInt()
         if (length > Int.MAX_VALUE.toUInt()) {
-            throw Trap.arrayOutOfBounds(Int.MAX_VALUE, 0)
+            throw ExecutionTrap.arrayOutOfBounds(Int.MAX_VALUE, 0)
         }
         return length.toInt()
     }

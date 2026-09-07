@@ -1,7 +1,6 @@
 package io.heapy.kwasm.tck
 
 import io.heapy.kwasm.Interpreter
-import io.heapy.kwasm.Machine
 import io.heapy.kwasm.Module
 import io.heapy.kwasm.Store
 import io.heapy.kwasm.wasi.BufferWasiOutput
@@ -148,7 +147,6 @@ public class WasiTestsuiteRunException(
  */
 public class WasiTestsuiteRunner(
     private val exclusions: WasiTestsuiteExclusions = WasiTestsuiteExclusions.Empty,
-    private val machine: Machine = Interpreter(),
     private val storeFactory: () -> Store = ::Store,
 ) {
     public suspend fun run(testCase: WasiTestsuiteCase): WasiTestsuiteResult {
@@ -189,8 +187,8 @@ public class WasiTestsuiteRunner(
         try {
             val module = Module.decode(testCase.wasmBytes())
             val instance = wasi.instantiate(storeFactory(), module)
-            instance.runStart(machine)
-            val result = instance.invoke("_start", machine = machine)
+            instance.runStart()
+            val result = instance.invoke("_start")
             if (result.isNotEmpty()) {
                 throw IllegalStateException("WASI _start returned ${result.size} value(s)")
             }

@@ -38,14 +38,6 @@ public data class ModuleValidationLimits(
     public val allowInertV128Types: Boolean = false,
 )
 
-/** Concise compatibility name for callers configuring module validation. */
-@io.heapy.kwasm.ExperimentalKwasmApi
-public typealias ValidationLimits = ModuleValidationLimits
-
-/** Concise compatibility name for callers configuring module validation. */
-@io.heapy.kwasm.ExperimentalKwasmApi
-public typealias ValidatorLimits = ModuleValidationLimits
-
 /** Pure validation entry point for the retained WebAssembly core model. */
 @io.heapy.kwasm.ExperimentalKwasmApi
 public object ModuleValidator {

@@ -138,10 +138,9 @@ fun main(): Unit = runBlocking {
 
 private suspend fun runWat(wat: String, export: String, args: List<Value>): List<Value> {
     val bytes = WatComposer.compose(wat)
-    val module = ModuleDecoder.decode(bytes)
+    val module = Module.decode(bytes)
     val instance = Instance(module, ResolvedImports())
-    val interp = Interpreter()
     val ex = instance.export(export) ?: throw IllegalStateException("no export $export")
     val idx = (ex.desc as ExportDesc.Function).index
-    return interp.invoke(instance, idx, args)
+    return instance.store.machine.invoke(instance, idx, args)
 }

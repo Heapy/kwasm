@@ -17,10 +17,6 @@ public class WasmDecodeException(
     cause: Throwable? = null,
 ) : KwasmException("decode error at byte $offset: $message", cause)
 
-/** Compatibility name retained for the original prototype API. */
-@io.heapy.kwasm.ExperimentalKwasmApi
-public typealias DecodeException = WasmDecodeException
-
 /** Base class for pure module-validation failures. */
 @io.heapy.kwasm.ExperimentalKwasmApi
 public sealed class ValidationException(message: String) : KwasmException(message)
@@ -208,10 +204,6 @@ public class ExecutionTrap(
             ExecutionTrap(TrapKind.OUT_OF_BOUNDS_MEMORY_ACCESS, "memory.grow failed")
     }
 }
-
-/** Compatibility name retained while consumers migrate to [WasmTrap]. */
-@io.heapy.kwasm.ExperimentalKwasmApi
-public typealias Trap = ExecutionTrap
 
 @io.heapy.kwasm.ExperimentalKwasmApi
 public class OutOfFuel(
