@@ -43,10 +43,12 @@ class SnapshotSuspensionSafetyJvmTest {
                 ),
             ),
         )
+        lateinit var resumerThread: Thread
         val resumerDispatcher =
             Executors
                 .newSingleThreadExecutor { runnable ->
                     Thread(runnable, "kwasm-host-import-resumer")
+                        .also { resumerThread = it }
                 }
                 .asCoroutineDispatcher()
 
@@ -71,7 +73,12 @@ class SnapshotSuspensionSafetyJvmTest {
                 suspensionThread === resumptionThread,
                 "the host import should resume on the thread that completes its suspension",
             )
-            assertEquals("kwasm-host-import-resumer", resumptionThread?.name)
+            // Compare thread identity: coroutine debug mode renames a thread
+            // while a coroutine runs on it, so the name is not stable here.
+            assertTrue(
+                resumptionThread === resumerThread,
+                "the host import should resume on the resumer thread",
+            )
             assertEquals(StoreStatus.Idle, store.status.value)
         } finally {
             resumerDispatcher.close()
