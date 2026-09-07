@@ -186,32 +186,7 @@ public class Interpreter : ResumableMachine {
 
             val instruction = control.body[control.pc]
             control.pc++
-            try {
-                when (
-                    executeNonSuspendingHotInstruction(
-                        store,
-                        frame,
-                        instruction,
-                        frame.instance,
-                        store.valueStack,
-                    )
-                ) {
-                    FastInstructionResult.Handled -> Unit
-                    FastInstructionResult.NotHandled ->
-                        executeInstruction(store, frame, instruction)
-                    FastInstructionResult.RequiresSlowCheckpoint ->
-                        store.checkpoint(
-                            handleFuel = false,
-                            listenerAlreadyNotified = true,
-                        )
-                }
-            } catch (thrown: GuestThrown) {
-                if (!handleGuestException(store, thrown.exception)) {
-                    throw UncaughtWasmException(thrown.exception)
-                }
-            }
-            canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            dispatchInstruction(store, frame, instruction)
         }
     }
 
@@ -278,32 +253,7 @@ public class Interpreter : ResumableMachine {
                 )
             }
             control.pc++
-            try {
-                when (
-                    executeNonSuspendingHotInstruction(
-                        store,
-                        frame,
-                        instruction,
-                        frame.instance,
-                        store.valueStack,
-                    )
-                ) {
-                    FastInstructionResult.Handled -> Unit
-                    FastInstructionResult.NotHandled ->
-                        executeInstruction(store, frame, instruction)
-                    FastInstructionResult.RequiresSlowCheckpoint ->
-                        store.checkpoint(
-                            handleFuel = false,
-                            listenerAlreadyNotified = true,
-                        )
-                }
-            } catch (thrown: GuestThrown) {
-                if (!handleGuestException(store, thrown.exception)) {
-                    throw UncaughtWasmException(thrown.exception)
-                }
-            }
-            canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            dispatchInstruction(store, frame, instruction)
         }
     }
 
@@ -312,6 +262,45 @@ public class Interpreter : ResumableMachine {
      * [io.heapy.kwasm.InstructionCostTable] makes the checkpoint countdown
      * unable to represent fuel. Budgeted fuel runs on [runUnmetered].
      */
+    /**
+     * Shared dispatch tail of the three control loops. The loops differ only in
+     * how they reach an instruction; once they have one, they all take the fast
+     * path, fall back to the general executor, honour a slow checkpoint, and
+     * settle a guest exception the same way.
+     */
+    private suspend inline fun dispatchInstruction(
+        store: Store,
+        frame: GuestCallFrame,
+        instruction: Instr,
+    ) {
+        try {
+            when (
+                executeNonSuspendingHotInstruction(
+                    store,
+                    frame,
+                    instruction,
+                    frame.instance,
+                    store.valueStack,
+                )
+            ) {
+                FastInstructionResult.Handled -> Unit
+                FastInstructionResult.NotHandled ->
+                    executeInstruction(store, frame, instruction)
+                FastInstructionResult.RequiresSlowCheckpoint ->
+                    store.checkpoint(
+                        handleFuel = false,
+                        listenerAlreadyNotified = true,
+                    )
+            }
+        } catch (thrown: GuestThrown) {
+            if (!handleGuestException(store, thrown.exception)) {
+                throw UncaughtWasmException(thrown.exception)
+            }
+        }
+        canonicalizeTop(store)
+        store.ensureValueStackLimit()
+    }
+
     private suspend fun runMetered(store: Store) {
         while (store.frames.isNotEmpty()) {
             val frame = store.frames.last()
@@ -329,32 +318,7 @@ public class Interpreter : ResumableMachine {
                 forceCheckpoint = instruction.requiresCallCheckpoint(),
             )
             control.pc++
-            try {
-                when (
-                    executeNonSuspendingHotInstruction(
-                        store,
-                        frame,
-                        instruction,
-                        frame.instance,
-                        store.valueStack,
-                    )
-                ) {
-                    FastInstructionResult.Handled -> Unit
-                    FastInstructionResult.NotHandled ->
-                        executeInstruction(store, frame, instruction)
-                    FastInstructionResult.RequiresSlowCheckpoint ->
-                        store.checkpoint(
-                            handleFuel = false,
-                            listenerAlreadyNotified = true,
-                        )
-                }
-            } catch (thrown: GuestThrown) {
-                if (!handleGuestException(store, thrown.exception)) {
-                    throw UncaughtWasmException(thrown.exception)
-                }
-            }
-            canonicalizeTop(store)
-            store.ensureValueStackLimit()
+            dispatchInstruction(store, frame, instruction)
         }
     }
 
@@ -837,6 +801,7 @@ public class Interpreter : ResumableMachine {
                         control,
                         body,
                         pc,
+                        meterCheckpoint = false,
                     )
                 ) {
                     store.ensureValueStackLimit()
@@ -968,12 +933,13 @@ public class Interpreter : ResumableMachine {
             if (superInstruction == LINEAR_PLAN_PRODUCERS_COMPARE_BR_IF.toInt()) {
                 if (
                     canExecutePlannedInstruction &&
-                    executePlannedProducersCompareBrIfUnmeteredOriginal(
+                    executePlannedProducersCompareBrIfOriginal(
                         store,
                         frame,
                         control,
                         body,
                         pc,
+                        meterCheckpoint = true,
                     )
                 ) {
                     store.ensureValueStackLimit()
@@ -1073,93 +1039,59 @@ public class Interpreter : ResumableMachine {
      * Managed-runtime variant kept deliberately direct: it performs the
      * comparison and any non-loop transfer before returning a handled flag.
      */
-    private fun executePlannedProducersCompareBrIfOriginal(
-        store: Store,
-        frame: GuestCallFrame,
-        control: GuestControlFrame,
-        body: List<Instr>,
-        pc: Int,
-    ): Boolean {
-        val first = body[pc] as FcIndex
-        val second = body[pc + 1]
-        val operation = body[pc + 2] as Simple
-        val branchInstruction = body[pc + 3] as BrIf
-        val locals = store.localStack
-        val left = locals.getI32(frame.localsBase + first.index)
-        val right = if (second is I32Const) {
-            second.value
-        } else {
-            locals.getI32(frame.localsBase + (second as FcIndex).index)
-        }
-        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
-        if (shouldBranch) {
-            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
-            if (
-                targetIndex in 0 until frame.controls.size &&
-                frame.controls[targetIndex].kind == ControlKind.Loop
-            ) {
-                return false
-            }
-        }
-
-        control.pc = pc + PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
-        if (shouldBranch) {
-            check(!branch(store, frame, branchInstruction.depth)) {
-                "non-loop planned branch unexpectedly requested a checkpoint"
-            }
-        }
-        return true
-    }
-
-    /**
-     * Checkpoint-enabled managed variant. Publishing the charged countdown
-     * and next PC before branching keeps listener- and trap-visible state
-     * consistent with four scalar instructions.
-     */
-    private fun executePlannedProducersCompareBrIfUnmeteredOriginal(
-        store: Store,
-        frame: GuestCallFrame,
-        control: GuestControlFrame,
-        body: List<Instr>,
-        pc: Int,
-    ): Boolean {
-        val first = body[pc] as FcIndex
-        val second = body[pc + 1]
-        val operation = body[pc + 2] as Simple
-        val branchInstruction = body[pc + 3] as BrIf
-        val locals = store.localStack
-        val left = locals.getI32(frame.localsBase + first.index)
-        val right = if (second is I32Const) {
-            second.value
-        } else {
-            locals.getI32(frame.localsBase + (second as FcIndex).index)
-        }
-        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
-        if (shouldBranch) {
-            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
-            if (
-                targetIndex in 0 until frame.controls.size &&
-                frame.controls[targetIndex].kind == ControlKind.Loop
-            ) {
-                return false
-            }
-        }
-
-        store.instructionsUntilCheckpoint -= PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
-        control.pc = pc + PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
-        if (shouldBranch) {
-            check(!branch(store, frame, branchInstruction.depth)) {
-                "non-loop planned branch unexpectedly requested a checkpoint"
-            }
-        }
-        return true
-    }
-
     /**
      * Executes the most common validated i32 producer/producer/operator
      * sequence as one dispatch. Callers guarantee that no checkpoint boundary
      * can fall inside these three logical instructions.
+     *
+     * With [meterCheckpoint] the charged countdown and the next PC are
+     * published before branching, which keeps listener- and trap-visible state
+     * consistent with four scalar instructions. Both call sites pass a
+     * constant, so the branch folds at the inlined call.
      */
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun executePlannedProducersCompareBrIfOriginal(
+        store: Store,
+        frame: GuestCallFrame,
+        control: GuestControlFrame,
+        body: List<Instr>,
+        pc: Int,
+        meterCheckpoint: Boolean,
+    ): Boolean {
+        val first = body[pc] as FcIndex
+        val second = body[pc + 1]
+        val operation = body[pc + 2] as Simple
+        val branchInstruction = body[pc + 3] as BrIf
+        val locals = store.localStack
+        val left = locals.getI32(frame.localsBase + first.index)
+        val right = if (second is I32Const) {
+            second.value
+        } else {
+            locals.getI32(frame.localsBase + (second as FcIndex).index)
+        }
+        val shouldBranch = executeI32Binary(operation.opcode, left, right) != 0
+        if (shouldBranch) {
+            val targetIndex = frame.controls.lastIndex - branchInstruction.depth
+            if (
+                targetIndex in 0 until frame.controls.size &&
+                frame.controls[targetIndex].kind == ControlKind.Loop
+            ) {
+                return false
+            }
+        }
+
+        if (meterCheckpoint) {
+            store.instructionsUntilCheckpoint -= PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
+        }
+        control.pc = pc + PLANNED_COMPARE_BRANCH_INSTRUCTION_COUNT
+        if (shouldBranch) {
+            check(!branch(store, frame, branchInstruction.depth)) {
+                "non-loop planned branch unexpectedly requested a checkpoint"
+            }
+        }
+        return true
+    }
+
     private fun executePlannedSuperInstructionOriginal(
         store: Store,
         frame: GuestCallFrame,
@@ -1623,155 +1555,18 @@ public class Interpreter : ResumableMachine {
         immediate: Int,
         body: List<Instr>,
         pc: Int,
-    ) {
-        val stack = store.valueStack
-        when (opcode) {
-            0x20 -> store.localStack.copyTo(
-                frame.localsBase + immediate,
-                stack,
-            )
-            0x21 -> stack.moveLastTo(
-                store.localStack,
-                frame.localsBase + immediate,
-            )
-            0x22 -> stack.copyTo(
-                stack.lastIndex,
-                store.localStack,
-                frame.localsBase + immediate,
-            )
-            0x41 -> stack.addLastI32(immediate)
-            0x45 -> stack.addLastI32(if (stack.removeLastI32() == 0) 1 else 0)
-            0x46 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left == right) 1 else 0)
-            }
-            0x47 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left != right) 1 else 0)
-            }
-            0x48 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left < right) 1 else 0)
-            }
-            0x49 -> {
-                val right = stack.removeLastI32().toUInt()
-                val left = stack.removeLastI32().toUInt()
-                stack.addLastI32(if (left < right) 1 else 0)
-            }
-            0x4A -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left > right) 1 else 0)
-            }
-            0x4B -> {
-                val right = stack.removeLastI32().toUInt()
-                val left = stack.removeLastI32().toUInt()
-                stack.addLastI32(if (left > right) 1 else 0)
-            }
-            0x4C -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left <= right) 1 else 0)
-            }
-            0x4D -> {
-                val right = stack.removeLastI32().toUInt()
-                val left = stack.removeLastI32().toUInt()
-                stack.addLastI32(if (left <= right) 1 else 0)
-            }
-            0x4E -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(if (left >= right) 1 else 0)
-            }
-            0x4F -> {
-                val right = stack.removeLastI32().toUInt()
-                val left = stack.removeLastI32().toUInt()
-                stack.addLastI32(if (left >= right) 1 else 0)
-            }
-            0x67 -> stack.addLastI32(clz32(stack.removeLastI32()))
-            0x68 -> stack.addLastI32(ctz32(stack.removeLastI32()))
-            0x69 -> stack.addLastI32(popcnt32(stack.removeLastI32()))
-            0x6A -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left + right)
-            }
-            0x6B -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left - right)
-            }
-            0x6C -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left * right)
-            }
-            0x6D -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(idiv(left, right))
-            }
-            0x6E -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(udiv(left, right))
-            }
-            0x6F -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(irem(left, right))
-            }
-            0x70 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(urem(left, right))
-            }
-            0x71 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left and right)
-            }
-            0x72 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left or right)
-            }
-            0x73 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(left xor right)
-            }
-            0x74 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(ishl(left, right))
-            }
-            0x75 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(isr(left, right))
-            }
-            0x76 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(ushr(left, right))
-            }
-            0x77 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(rotl(left, right))
-            }
-            0x78 -> {
-                val right = stack.removeLastI32()
-                val left = stack.removeLastI32()
-                stack.addLastI32(rotr(left, right))
-            }
-            else -> executeNonSuspendingHotInstructionOriginal(store, frame, body[pc])
-        }
-    }
+    ): Unit = executeLinearHotInstruction(
+        store,
+        frame,
+        store.valueStack,
+        store.localStack,
+        frame.localsBase,
+        frame.instance,
+        opcode,
+        immediate,
+        body,
+        pc,
+    )
 
     @Suppress("NOTHING_TO_INLINE")
     private inline fun executeLinearHotInstruction(
