@@ -20,8 +20,8 @@ internal fun <T> Iterable<T>.frozen(): List<T> = FrozenList(this)
 
 /**
  * [linearHotCodeCache] holds a whole cache entry behind a single reference, so
- * two stores racing over a shared module can only lose an entry; neither can
- * read an owner and a plan that belong to different stores.
+ * two planners racing over a shared module can only lose an entry; neither can
+ * read an owner and a plan that belong to different planners.
  */
 internal class FrozenInstructions(source: List<Instr>) : AbstractList<Instr>() {
     private val values: Array<Instr> = source.toTypedArray()
